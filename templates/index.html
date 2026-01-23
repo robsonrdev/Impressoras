@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Central de Impressão 3D</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+    <header>
+        <h1>Controle de Farm - Neptune 4</h1>
+        <p>Gerenciamento Centralizado de Arquivos de Rede</p>
+        
+        
+    </header>
+
+    <div class="grid-container">
+        
+        {% for ip, dados in impressoras.items() %}
+        <div class="card {{ dados.cor }}" onclick="abrirModal('{{ ip }}', '{{ dados.nome }}')">
+            
+            <div class="card-header">
+                <span class="numero">#{{ loop.index }}</span>
+                <span class="status-dot"></span>
+            </div>
+            
+            <div class="card-body">
+                <div class="img-container">
+                    <img src="{{ url_for('static', filename='img/' + dados.imagem) }}" alt="Impressora">
+                </div>
+
+                <h2>{{ dados.modelo_real }}</h2>
+                <p style="font-size: 0.8rem; color: #888; margin-bottom: 10px;">{{ ip }}</p>
+
+                {% if dados.status == 'printing' or dados.status == 'paused' %}
+                    <div class="info-impressao">
+                        <p class="nome-arquivo">{{ dados.arquivo }}</p>
+                        <div class="barra-fundo">
+                            <div class="barra-progresso" style="width: {{ dados.progresso }}%;"></div>
+                        </div>
+                    </div>
+                {% endif %}
+
+                <p class="status-text">{{ dados.msg }}</p>
+            </div>
+        </div>
+        {% endfor %}
+
+    </div>
+
+    <div id="modalImprimir" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="fecharModal()">&times;</span>
+            <h2 id="tituloModal">Enviar para: ...</h2>
+            
+            <div class="lista-arquivos">
+                <div class="barra-navegacao">
+                    <button id="btnVoltar" onclick="voltarPasta()" disabled>⬅ Voltar</button>
+                    <span id="caminhoAtual" style="margin-left: 10px; color: #00e676; font-family: monospace;">/</span>
+                </div>
+
+                <ul id="listaGcodes">
+                    <li style="color: #aaa; text-align: center; padding: 20px;">Carregando...</li>
+                </ul>
+            </div>
+
+            <div class="acoes">
+                <button id="btnEnviar" class="btn-bloqueado" disabled>CONFIRMAR IMPRESSÃO</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let impressoraSelecionada = '';
+        let pastaAtual = ''; // Caminho relativo dentro da pasta H:
+
+        // 1. ABRE O MODAL E CARREGA A PASTA RAIZ
+        function abrirModal(ip, nome) {
+            impressoraSelecionada = ip;
+            document.getElementById('modalImprimir').style.display = "flex";
+            document.getElementById('tituloModal').innerText = "Enviar para: " + nome;
+            
+            // Reseta para a raiz e carrega
+            pastaAtual = '';
+            carregarPasta(''); 
+            
+            // Reseta botão de imprimir
+            let btn = document.getElementById('btnEnviar');
+            btn.disabled = true;
+            btn.classList.add('btn-bloqueado');
+            btn.classList.remove('btn-enviar');
+            btn.innerText = "CONFIRMAR IMPRESSÃO";
+        }
+
+        // 2. FUNÇÃO QUE CHAMA O PYTHON PARA LER A PASTA
+        function carregarPasta(caminho) {
+            let ul = document.getElementById('listaGcodes');
+            ul.innerHTML = '<li style="color: gray; text-align: center;">Carregando...</li>';
+
+            fetch('/navegar', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ pasta: caminho })
+            })
+            .then(r => r.json())
+            .then(dados => {
+                if(dados.erro) {
+                    ul.innerHTML = `<li style="color: red;">Erro: ${dados.erro}</li>`;
+                    return;
+                }
+                pastaAtual = dados.atual;
+                atualizarInterface(dados);
+            })
+            .catch(e => {
+                ul.innerHTML = `<li style="color: red;">Erro de conexão.</li>`;
+            });
+        }
+
+        // 3. DESENHA A LISTA DE PASTAS E ARQUIVOS
+        function atualizarInterface(dados) {
+            let ul = document.getElementById('listaGcodes');
+            ul.innerHTML = ''; // Limpa
+            
+            // Atualiza texto do caminho
+            document.getElementById('caminhoAtual').innerText = dados.atual === '' ? 'Início' : dados.atual;
+            
+            // Habilita/Desabilita botão voltar
+            document.getElementById('btnVoltar').disabled = (dados.atual === '');
+
+            // A. LISTAR PASTAS
+            dados.pastas.forEach(pasta => {
+                let li = document.createElement('li');
+                li.innerHTML = `<div style="display:flex; align-items:center; gap:10px; font-weight:bold; color:#ffd700;">
+                                    <span>📁</span> <span>${pasta}</span>
+                                </div>`;
+                li.onclick = () => {
+                    // Concatena o caminho (usa barra invertida dupla para escapar no JS)
+                    let separador = dados.atual ? '\\' : ''; 
+                    let novaPasta = dados.atual + separador + pasta;
+                    carregarPasta(novaPasta);
+                };
+                ul.appendChild(li);
+            });
+
+            // B. LISTAR ARQUIVOS
+            dados.arquivos.forEach(arquivo => {
+                let li = document.createElement('li');
+                li.innerHTML = `<div style="display:flex; align-items:center; gap:10px;">
+                                    <span>📄</span> <span>${arquivo}</span>
+                                </div>`;
+                
+                li.onclick = () => selecionarArquivo(li, arquivo);
+                ul.appendChild(li);
+            });
+
+            if (dados.pastas.length === 0 && dados.arquivos.length === 0) {
+                ul.innerHTML = '<li style="color:gray; text-align:center; padding:20px;">Pasta vazia</li>';
+            }
+        }
+
+        // 4. BOTÃO VOLTAR
+        function voltarPasta() {
+            if(!pastaAtual) return;
+            // Remove a última parte do caminho
+            let partes = pastaAtual.split('\\');
+            partes.pop();
+            carregarPasta(partes.join('\\'));
+        }
+
+        // 5. SELECIONAR ARQUIVO PARA IMPRIMIR
+        function selecionarArquivo(elemento, nomeArquivo) {
+            // Visual
+            document.querySelectorAll('li').forEach(i => i.classList.remove('selecionado'));
+            elemento.classList.add('selecionado');
+            
+            // Lógica do botão
+            let btn = document.getElementById('btnEnviar');
+            btn.disabled = false;
+            btn.classList.remove('btn-bloqueado');
+            btn.classList.add('btn-enviar');
+            
+            // Salva o caminho completo no botão para usar depois
+            let separador = pastaAtual ? '\\' : '';
+            let caminhoCompleto = pastaAtual + separador + nomeArquivo;
+            
+            btn.dataset.arquivo = caminhoCompleto; 
+            btn.innerText = "IMPRIMIR: " + nomeArquivo;
+        }
+
+        // 6. ENVIAR COMANDO DE IMPRESSÃO
+        document.getElementById('btnEnviar').onclick = function() {
+            let arquivoParaImprimir = this.dataset.arquivo;
+            
+            alert("Enviando comando para a impressora... Aguarde.");
+            
+            fetch('/imprimir', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    ip: impressoraSelecionada,
+                    arquivo: arquivoParaImprimir
+                })
+            })
+            .then(r => {
+                if(r.ok) {
+                    alert("Arquivo enviado e impressão iniciada!");
+                    fecharModal();
+                    setTimeout(() => location.reload(), 2000);
+                } else {
+                    alert("Erro ao conectar com a impressora.");
+                }
+            });
+        };
+
+        // 7. FECHAR MODAL
+        function fecharModal() {
+            document.getElementById('modalImprimir').style.display = "none";
+        }
+        
+        window.onclick = function(event) {
+            if (event.target == document.getElementById('modalImprimir')) {
+                fecharModal();
+            }
+        }
+
+        // 8. UPLOAD (Caso use o botão de cima)
+        function fazerUpload() {
+            let input = document.getElementById('inputUpload');
+            let file = input.files[0];
+            if(!file) return;
+            let formData = new FormData();
+            formData.append('arquivo', file);
+            alert("Enviando...");
+            fetch('/upload', {method: 'POST', body: formData})
+            .then(r => r.json())
+            .then(d => { alert(d.msg); location.reload(); });
+        }
+    </script>
+</body>
+</html>
