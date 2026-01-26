@@ -1,273 +1,353 @@
-/* ============================================================
-   SEU CÓDIGO ORIGINAL (MANTIDO INTACTO)
-   ============================================================ */
+/* ==========================================================================
+   1. Configurações Globais e Variáveis (TEMA PRETO & LARANJA)
+   ========================================================================== */
+:root {
+    /* Paleta Principal */
+    --accent-orange: #ff6d00;     /* Laranja vibrante para destaques */
+    --accent-orange-dark: #d84600; /* Laranja mais escuro para interações */
+    --bg-main: #050505;           /* Fundo da página (quase preto absoluto) */
+    --bg-card: #141414;           /* Fundo dos cartões (cinza muito escuro) */
+    --bg-card-hover: #1a1a1a;     /* Fundo do cartão ao passar o mouse */
+    --border-color: #2a2a2a;      /* Cor das bordas sutis */
+    
+    /* Texto */
+    --text-primary: #ffffff;
+    --text-secondary: #a0a0a0;
+    --text-tertiary: #666666;
 
-/* Reset básico */
-* { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Roboto', sans-serif; }
+    /* Cores de Status Semântico */
+    --status-ready-bg: rgba(46, 184, 92, 0.15);
+    --status-ready-fg: #2eb85c;
+    
+    --status-printing-bg: rgba(255, 109, 0, 0.15);
+    --status-printing-fg: var(--accent-orange);
+
+    --status-paused-bg: rgba(249, 177, 21, 0.15);
+    --status-paused-fg: #f9b115;
+
+    --status-offline-bg: rgba(102, 102, 102, 0.15);
+    --status-offline-fg: #888888;
+}
+
+/* Reset Básico */
+* { 
+    margin: 0; 
+    padding: 0; 
+    box-sizing: border-box; 
+    -webkit-tap-highlight-color: transparent; 
+}
 
 body {
-    background-color: #1e1e27; /* Fundo escuro confortável */
-    color: white;
-    padding: 20px;
+    background-color: var(--bg-main);
+    font-family: 'Roboto', sans-serif;
+    color: var(--text-primary);
+    line-height: 1.5;
+    min-height: 100vh;
+    background-image: radial-gradient(circle at top right, rgba(255, 109, 0, 0.05), transparent 40%);
 }
 
-header {
-    text-align: center;
-    margin-bottom: 40px;
+/* ==========================================================================
+   2. Cabeçalho Profissional (Logo + Título)
+   ========================================================================== */
+.main-header {
+    background: var(--bg-card);
+    border-bottom: 3px solid var(--accent-orange);
+    padding: 15px 20px;
+    margin-bottom: 30px;
+    box-shadow: 0 4px 25px rgba(0, 0, 0, 0.6);
 }
 
-header h1 { font-size: 2.5rem; margin-bottom: 10px; }
-header p { color: #aaa; }
-
-/* O GRID DAS IMPRESSORAS */
-.grid-container {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); /* Ajusta auto para caber na tela */
-    gap: 20px;
+.header-container {
     max-width: 1400px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 25px;
+}
+
+.company-logo {
+    height: 55px;
+    width: auto;
+    display: block;
+}
+
+.header-title h1 {
+    font-size: 1.6rem;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+}
+
+.header-title .highlight {
+    color: var(--accent-orange);
+}
+
+.header-title p {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+/* ==========================================================================
+   3. Grid e Cartões (Layout Vertical com Imagem Grande)
+   ========================================================================== */
+.main-content {
+    padding: 0 20px 40px 20px;
+    max-width: 1440px;
     margin: 0 auto;
 }
 
-/* O CARTÃO DA IMPRESSORA */
+.grid-responsive {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 25px;
+}
+
 .card {
-    background-color: #28242a;
-    border-radius: 15px;
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 20px;
     padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
     cursor: pointer;
-    transition: transform 0.2s, box-shadow 0.2s;
-    border: 3px solid transparent;
-    position: relative;
-    overflow: hidden;
+    transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
-.card:hover {
-    transform: translateY(-5px);
-    box-shadow: 0 10px 20px rgba(0,0,0,0.3);
+@media (hover: hover) {
+    .card:hover {
+        transform: translateY(-8px);
+        background-color: var(--bg-card-hover);
+        border-color: var(--accent-orange);
+        box-shadow: 0 15px 35px rgba(255, 109, 0, 0.15);
+    }
 }
 
-.card-header {
+.card:active { transform: scale(0.98); }
+
+/* Topo do Card */
+.card-header-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 15px;
 }
 
-.numero {
-    font-size: 2rem;
-    font-weight: bold;
-    opacity: 0.3;
-}
-
-.card h2 { font-size: 1.2rem; margin-bottom: 5px; }
-.status-text { font-weight: bold; font-size: 0.9rem; }
-
-/* ESTADOS (CORES) */
-
-/* 1. PRONTA (VERDE) */
-.card.ready {
-    border-color: #00e676;
-    box-shadow: 0 0 10px rgba(0, 230, 118, 0.1);
-}
-.card.ready .status-text { color: #00e676; }
-.card.ready .status-dot {
-    width: 15px; height: 15px; background: #00e676; border-radius: 50%;
-    box-shadow: 0 0 10px #00e676;
-}
-
-/* 2. IMPRIMINDO (VERMELHO + ANIMAÇÃO) */
-.card.printing {
-    border-color: #df0139;
-    cursor: not-allowed; /* Mostra que não pode clicar */
-    opacity: 0.8;
-}
-.card.printing .status-text { color: #df0139; }
-.card.printing .status-dot {
-    width: 15px; height: 15px; background: #df0139; border-radius: 50%;
-    animation: piscar 1s infinite;
-}
-
-/* 3. OFFLINE (CINZA) */
-.card.offline {
-    border-color: #555;
-    background-color: #25252b;
-    opacity: 0.5;
-    cursor: default;
-}
-.card.offline .status-text { color: #777; }
-.card.offline .status-dot {
-    width: 15px; height: 15px; background: #555; border-radius: 50%;
-}
-
-@keyframes piscar {
-    0% { opacity: 1; }
-    50% { opacity: 0.4; }
-    100% { opacity: 1; }
-}
-
-/* MODAL (Pop-up) */
-.modal {
-    display: none; /* Escondido por padrão */
-    position: fixed;
-    top: 0; left: 0; width: 100%; height: 100%;
-    background-color: rgba(0,0,0,0.8);
-    justify-content: center;
-    align-items: center;
-    z-index: 1000;
-}
-
-.modal-content {
-    background-color: #2b2b36;
-    padding: 30px;
-    border-radius: 15px;
-    width: 90%;
-    max-width: 500px;
-    position: relative;
-    text-align: center;
-    border: 2px solid #00e676;
-}
-
-.close {
-    position: absolute; top: 10px; right: 20px;
-    font-size: 30px; cursor: pointer;
-}
-
-.lista-arquivos {
-    margin-top: 20px;
-    text-align: left;
-    max-height: 300px;
-    overflow-y: auto;
-    background: #1e1e24;
-    border-radius: 10px;
-}
-
-.lista-arquivos ul { list-style: none; }
-
-.lista-arquivos li {
-    padding: 15px;
-    border-bottom: 1px solid #333;
-    cursor: pointer;
-    transition: 0.2s;
-}
-
-.lista-arquivos li:hover { background-color: #333; }
-.lista-arquivos li.selecionado { background-color: #00e676; color: black; font-weight: bold; }
-
-.acoes { margin-top: 20px; }
-
-button {
-    padding: 15px 30px;
-    font-size: 1rem;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    width: 100%;
-    font-weight: bold;
-}
-
-.btn-bloqueado { background-color: #444; color: #888; cursor: not-allowed; }
-.btn-enviar { background-color: #00e676; color: #000; }
-
-
-/* Estilo da Imagem da Impressora */
-.img-container {
-    height: 120px; /* Altura fixa para alinhar tudo */
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin-bottom: 50px;
-    border-radius: 10px;
-}
-
-.img-container img {
-    max-height: 700px;
-    max-width: 700px;
-    object-fit: contain; /* Garante que a img caiba sem distorcer */
-    filter: drop-shadow(0 4px 4px rgba(0,0,0,0.5)); /* Sombra 3D */
-}
-
-/* ============================================================
-   NOVAS ADIÇÕES (PARA O STATUS DE PAUSA E BARRA DE PROGRESSO)
-   ============================================================ */
-
-/* 4. PAUSADA / FILAMENTO (AMARELO) */
-.card.paused {
-    border-color: #ffeb3b;
-    animation: pulsar 2s infinite;
-}
-.card.paused .status-text { color: #ffeb3b; }
-.card.paused .status-dot {
-    width: 15px; height: 15px; background: #ffeb3b; border-radius: 50%;
-}
-
-@keyframes pulsar {
-    0% { box-shadow: 0 0 0 0 rgba(255, 235, 59, 0.4); }
-    70% { box-shadow: 0 0 0 15px rgba(255, 235, 59, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(255, 235, 59, 0); }
-}
-
-/* BARRA DE PROGRESSO E INFORMAÇÕES DE ARQUIVO */
-.info-impressao {
-    background: rgba(0,0,0,0.3);
-    padding: 10px;
-    border-radius: 8px;
-    margin-bottom: 15px; /* Espaço antes do texto de status */
-    text-align: left;
-}
-
-.nome-arquivo {
+.badge-id {
+    font-family: 'JetBrains Mono', monospace;
     font-size: 0.85rem;
-    color: #ddd;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    margin-bottom: 5px;
-    font-style: italic;
+    color: var(--text-tertiary);
 }
 
-.barra-fundo {
-    width: 100%;
-    height: 6px;
-    background-color: #444;
-    border-radius: 3px;
-    overflow: hidden;
-}
-
-.barra-progresso {
-    height: 100%;
-    background-color: #2196F3; /* Azul padrão da barra */
-    transition: width 0.5s;
-}
-
-/* Se a impressora estiver pausada, a barra também fica amarela */
-.card.paused .barra-progresso { 
-    background-color: #ffeb3b; 
-}
-
-
-.barra-navegacao {
+.status-badge {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 10px;
-    background-color: #25252b;
-    border-bottom: 1px solid #444;
-    margin-bottom: 5px;
+    gap: 8px;
+    padding: 6px 14px;
+    border-radius: 30px;
+    font-size: 0.7rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    background: var(--border-color);
+    color: var(--text-secondary);
 }
 
-.barra-navegacao button {
-    width: auto;
-    padding: 5px 10px;
-    background: #444;
-    color: white;
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+
+/* Corpo do Card: Imagem em destaque */
+.card-body-row {
+    display: flex;
+    flex-direction: column; /* Alinha em cima do outro */
+    align-items: center;
+    gap: 20px;
+    width: 100%;
+}
+
+.printer-thumb {
+    width: 100%;
+    height: 220px;       /* Mantenha o tamanho que você deseja para a "caixa" */
+    padding: 0px;        /* <--- ALTERE AQUI: Mude de 20px para 0 ou 5px */
+    
+    background: rgba(0, 0, 0, 0.4); 
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;    /* Garante que a imagem não "escape" pelas bordas */
+}
+
+.printer-thumb img {
+    width: 100%;         /* Força a imagem a ocupar toda a largura disponível */
+    height: 100%;        /* Força a imagem a ocupar toda a altura disponível */
+    object-fit: contain; /* Mantém a proporção para não achatar a impressora */
+}
+
+.card:hover .printer-thumb img {
+    transform: scale(1.1); /* Zoom na imagem ao passar o mouse */
+}
+
+/* Informações abaixo da imagem */
+.printer-info {
+    text-align: center;
+    width: 100%;
+}
+
+.printer-info h2 {
+    font-size: 1.3rem;
+    font-weight: 600;
+    margin-bottom: 10px;
+    color: var(--text-primary);
+}
+
+.ip-tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    background: rgba(0, 0, 0, 0.4);
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+}
+
+/* Progresso e Arquivo */
+.progress-section {
+    margin-top: 5px;
+    padding-top: 15px;
+    border-top: 1px solid var(--border-color);
+}
+
+.progress-info {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 10px;
     font-size: 0.8rem;
 }
 
-.barra-navegacao button:disabled {
-    opacity: 0.3;
-    cursor: default;
+.file-name {
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 75%;
 }
 
-#caminhoAtual {
-    font-family: monospace;
-    color: #00e676;
+.percentage-text {
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--accent-orange);
+    font-weight: 700;
 }
+
+.progress-bar-track {
+    width: 100%;
+    height: 10px;
+    background: #000;
+    border-radius: 5px;
+    overflow: hidden;
+}
+
+.progress-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-orange-dark), var(--accent-orange));
+    border-radius: 5px;
+    transition: width 0.8s ease-in-out;
+}
+
+/* Status Dinâmicos */
+.card[data-status="ready"] .status-badge { background: var(--status-ready-bg); color: var(--status-ready-fg); }
+.card[data-status="printing"] .status-badge { background: var(--status-printing-bg); color: var(--status-printing-fg); }
+.card[data-status="printing"] .status-dot { animation: pulseOrange 1.5s infinite; }
+.card[data-status="printing"] { border-bottom: 4px solid var(--accent-orange); }
+.card[data-status="paused"] .status-badge { background: var(--status-paused-bg); color: var(--status-paused-fg); }
+.card[data-status="paused"] .progress-bar-fill { background: var(--status-paused-fg); }
+.card[data-status="offline"] { opacity: 0.5; filter: grayscale(0.9); }
+
+@keyframes pulseOrange {
+    0% { box-shadow: 0 0 0 0 rgba(255, 109, 0, 0.5); }
+    70% { box-shadow: 0 0 0 8px rgba(255, 109, 0, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(255, 109, 0, 0); }
+}
+
+/* ==========================================================================
+   4. Modal (Janela de Arquivos)
+   ========================================================================== */
+.modal-overlay {
+    display: none;
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0, 0, 0, 0.9); backdrop-filter: blur(8px);
+    z-index: 1000;
+    align-items: center; justify-content: center;
+    padding: 20px;
+}
+
+.modal-window {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    width: 100%; max-width: 550px; height: 85vh; 
+    border-radius: 24px; overflow: hidden;
+    display: flex; flex-direction: column;
+}
+
+.modal-header {
+    padding: 25px; display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.modal-header h2 { font-size: 1.3rem; color: var(--accent-orange); }
+
+.close-btn { background: none; border: none; color: var(--text-tertiary); font-size: 2.5rem; cursor: pointer; }
+
+.breadcrumb-bar {
+    padding: 15px 25px; background: rgba(0,0,0,0.3); border-bottom: 1px solid var(--border-color);
+    display: flex; align-items: center; gap: 15px;
+}
+
+.btn-back {
+    background: var(--border-color); color: white; border: none;
+    padding: 10px 16px; border-radius: 10px; cursor: pointer; font-size: 0.8rem;
+}
+
+.btn-back:disabled { opacity: 0.3; }
+
+.path-display { font-family: 'JetBrains Mono'; color: var(--accent-orange); font-size: 0.8rem; }
+
+.file-explorer-container { flex-grow: 1; overflow-y: auto; padding: 10px 0; }
+
+.file-list li {
+    padding: 18px 25px;
+    border-bottom: 1px solid var(--border-color);
+    cursor: pointer; display: flex; align-items: center; gap: 15px;
+}
+
+.file-list li.selected {
+    background: var(--accent-orange) !important; color: #000 !important; font-weight: 700;
+}
+
+.modal-footer { padding: 25px; background: rgba(0,0,0,0.2); }
+
+.btn-action {
+    width: 100%; padding: 20px; border-radius: 15px; border: none;
+    background: var(--accent-orange); color: black; font-weight: 800; font-size: 1.1rem; cursor: pointer;
+}
+
+.btn-action:disabled { background: var(--border-color); color: var(--text-tertiary); }
+
+/* ==========================================================================
+   5. Media Queries (Responsividade)
+   ========================================================================== */
+@media (max-width: 600px) {
+    .header-container { flex-direction: column; text-align: center; }
+    .company-logo { height: 45px; }
+    .grid-responsive { grid-template-columns: 1fr; }
+    .modal-window { height: 100vh; border-radius: 0; }
+    .printer-thumb { height: 180px; } /* Ajuste de imagem no celular */
+}
+
+@media (min-width: 1025px) {
+    .modal-window { height: auto; max-height: 650px; border: 2px solid var(--accent-orange); }
+    .file-list li { padding: 12px 25px; }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-track { background: var(--bg-main); }
+::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent-orange); }
