@@ -35,10 +35,10 @@ def testar_conexao_rapida(ip, porta=80):
 def verificar_ip(i):
     ip = f"{IP_BASE}{i}"
     
-    # Se falhar uma vez, tenta de novo rápido antes de marcar como offline
     if not testar_conexao_rapida(ip):
         time.sleep(0.1)
         if not testar_conexao_rapida(ip):
+            # AJUSTE: Só tenta atualizar se o IP já tiver sido cadastrado alguma vez
             if ip in IMPRESSORAS_ENCONTRADAS:
                 IMPRESSORAS_ENCONTRADAS[ip].update({
                     'status': 'offline', 
@@ -57,12 +57,11 @@ def verificar_ip(i):
             filename = dados['result']['status']['print_stats']['filename']
             progresso = int(dados['result']['status']['display_status']['progress'] * 100)
             
-            # Lógica de cores para o CSS
             cor_status = "printing" if status == "printing" else "ready"
             if status == "paused": cor_status = "paused"
             if status == "error": cor_status = "offline"
 
-            # Atualiza o dicionário sem deletar nada (estabilidade da grade)
+            # Atualiza ou cria o registro
             IMPRESSORAS_ENCONTRADAS[ip] = {
                 'nome': f"MÁQUINA {i}", 
                 'modelo_real': "Neptune 4 MAX",
@@ -74,7 +73,7 @@ def verificar_ip(i):
                 'arquivo': filename if filename else "Nenhum",
                 'progresso': progresso
             }
-    except:
+    except Exception:
         pass
 
 # --- FUNÇÃO 3: SCANNER EM SEGUNDO PLANO ---
@@ -143,4 +142,4 @@ def imprimir():
         return jsonify({"success": False, "message": str(e)})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=5000, debug=True)
