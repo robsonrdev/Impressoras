@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Painel de Controle 3D</title>
+    <title>Painel de Controle 3D - PRO</title>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
@@ -12,7 +12,7 @@
     <header class="main-header">
         <div class="header-container">
             <div class="logo-area">
-                <img src="/static/img/logo.png" alt="Logo da Empresa" class="company-logo" onerror="this.style.backgroundColor='#333'; this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'50\' height=\'50\'><text x=\'50%\' y=\'50%\' fill=\'%23ff6d00\' dominant-baseline=\'middle\' text-anchor=\'middle\'>LOGO</text></svg>';">
+                <img src="/static/img/logo.png" alt="Logo" class="company-logo" onerror="this.style.backgroundColor='#333';">
             </div>
             <div class="header-title">
                 <h1>Central de Impressão <span class="highlight">PRO</span></h1>
@@ -24,37 +24,35 @@
     <main class="main-content">
         <div class="grid-responsive">
             {% for ip, dados in impressoras.items() %}
-            <section class="card" data-status="{{ dados.status }}" onclick="abrirModal('{{ ip }}', '{{ dados.nome }}')">
+            <section class="card {{ dados.cor }}" onclick="abrirModal('{{ ip }}', '{{ dados.nome }}')">
                 <div class="card-header-row">
                     <span class="badge-id">#{{ loop.index }}</span>
                     <div class="status-badge">
-                        <span class="status-dot"></span>
-                        <span class="status-label">{{ dados.msg }}</span>
+                        <span class="status-dot {{ 'printing' if dados.status == 'printing' else '' }}"></span>
+                        <span class="status-label status-text">{{ dados.msg }}</span>
                     </div>
                 </div>
 
                 <div class="card-body-row">
                     <div class="printer-thumb">
-                        <img src="{{ url_for('static', filename='img/' + dados.imagem) }}" alt="{{ dados.modelo_real }}">
+                        <img src="{{ url_for('static', filename='img/' + dados.imagem) }}" alt="Printer">
                     </div>
-                    
                     <div class="printer-info">
                         <h2>{{ dados.modelo_real }}</h2>
                         <code class="ip-tag">{{ ip }}</code>
                     </div>
                 </div>
 
-                {% if dados.status in ['printing', 'paused'] %}
-                <div class="progress-section">
-                    <div class="progress-info">
-                        <span class="file-name">📄 {{ dados.arquivo }}</span>
-                        <span class="percentage-text">{{ dados.progresso }}%</span>
-                    </div>
-                    <div class="progress-bar-track">
-                        <div class="progress-bar-fill" style="width: {{ dados.progresso }}%;"></div>
+                <div class="info-impressao" style="display: {{ 'block' if dados.status in ['printing', 'paused'] else 'none' }};">
+                    <div class="progress-section">
+                        <div class="progress-info">
+                            <span class="file-name nome-arquivo">📄 {{ dados.arquivo }}</span>
+                        </div>
+                        <div class="progress-bar-track">
+                            <div class="progress-bar-fill barra-progresso" style="width: {{ dados.progresso }}%;"></div>
+                        </div>
                     </div>
                 </div>
-                {% endif %}
             </section>
             {% endfor %}
         </div>
@@ -64,24 +62,34 @@
         <div class="modal-window">
             <header class="modal-header">
                 <h2 id="tituloModal">Selecionar Arquivo</h2>
-                <button class="close-btn" onclick="fecharModal()" aria-label="Fechar">&times;</button>
+                <button class="close-btn" onclick="fecharModal()">&times;</button>
             </header>
 
             <div class="breadcrumb-bar">
                 <button id="btnVoltar" onclick="voltarPasta()" class="btn-back" disabled>
-                    <span class="icon">⬅</span> Voltar
+                    <span>⬅</span> Voltar
                 </button>
                 <div class="path-display" id="caminhoAtual">/raiz</div>
             </div>
 
             <div class="file-explorer-container">
                 <ul id="listaGcodes" class="file-list">
-                    <li class="loading-state">Conectando ao servidor...</li>
+                    <li class="loading-state">Conectando...</li>
                 </ul>
             </div>
 
+            <div id="containerProgresso" class="upload-container" style="display: none;">
+                <div class="progress-label-row">
+                    <span id="statusUploadTxt">Transmitindo para impressora...</span>
+                    <span id="porcentagemUploadTxt">0%</span>
+                </div>
+                <div class="upload-track">
+                    <div id="barraProgressoUpload" class="upload-fill"></div>
+                </div>
+            </div>
+
             <footer class="modal-footer">
-                <button id="btnEnviar" class="btn-action" disabled>CONFIRMAR IMPRESSÃO</button>
+                <button id="btnEnviar" class="btn-action" disabled>SELECIONE UM ARQUIVO</button>
             </footer>
         </div>
     </div>
@@ -89,8 +97,9 @@
     <script>
         let impressoraSelecionada = '';
         let pastaAtual = '';
+        let pollingUpload = null;
 
-        // --- 1. Sincronização de Status ---
+        // --- 1. Sincronização de Status (Dashboard) ---
         function atualizarStatusInstantaneo() {
             fetch('/status_atualizado')
                 .then(r => r.json())
@@ -99,11 +108,9 @@
                         const card = document.querySelector(`.card[onclick*="${ip}"]`);
                         if (!card) return;
 
-                        // Atualiza estado visual
                         card.className = `card ${dados.cor}`;
                         const dot = card.querySelector('.status-dot');
                         dot.className = `status-dot ${dados.status === 'printing' ? 'printing' : ''}`;
-                        
                         card.querySelector('.status-text').innerText = dados.msg;
 
                         const infoDiv = card.querySelector('.info-impressao');
@@ -116,16 +123,20 @@
                         }
                     });
                 })
-                .catch(err => console.error("Falha na telemetria:", err));
+                .catch(err => console.error("Erro na telemetria:", err));
         }
-
         setInterval(atualizarStatusInstantaneo, 2000);
 
-        // --- 2. Navegação de Arquivos (FS Remoto) ---
+        // --- 2. Navegação de Arquivos ---
         function abrirModal(ip, nome) {
             impressoraSelecionada = ip;
             document.getElementById('modalImprimir').style.display = "flex";
             document.getElementById('tituloModal').innerText = `Comandar: ${nome}`;
+            
+            // Reset UI do Modal
+            document.querySelector('.file-explorer-container').style.display = 'block';
+            document.getElementById('containerProgresso').style.display = 'none';
+            document.getElementById('btnEnviar').style.display = 'block';
             
             pastaAtual = '';
             carregarPasta(''); 
@@ -134,7 +145,7 @@
 
         function carregarPasta(caminho) {
             const ul = document.getElementById('listaGcodes');
-            ul.innerHTML = '<li class="loading-msg">Consultando servidor...</li>';
+            ul.innerHTML = '<li class="loading-msg">Consultando...</li>';
 
             fetch('/navegar', {
                 method: 'POST',
@@ -143,23 +154,17 @@
             })
             .then(r => r.json())
             .then(dados => {
-                if(dados.erro) throw new Error(dados.erro);
                 pastaAtual = dados.atual;
                 renderizarArquivos(dados);
-            })
-            .catch(e => {
-                ul.innerHTML = `<li style="color: #ff5252; padding: 15px;">⚠️ Erro: ${e.message}</li>`;
             });
         }
 
         function renderizarArquivos(dados) {
             const ul = document.getElementById('listaGcodes');
             ul.innerHTML = ''; 
-            
             document.getElementById('caminhoAtual').innerText = dados.atual || 'Raiz (gcodes)';
             document.getElementById('btnVoltar').disabled = (dados.atual === '');
 
-            // Renderizar Pastas
             dados.pastas.forEach(p => {
                 const li = document.createElement('li');
                 li.className = 'item-pasta';
@@ -168,7 +173,6 @@
                 ul.appendChild(li);
             });
 
-            // Renderizar Gcodes
             dados.arquivos.forEach(arq => {
                 const li = document.createElement('li');
                 li.className = 'item-arquivo';
@@ -176,25 +180,19 @@
                 li.onclick = () => selecionarArquivo(li, arq);
                 ul.appendChild(li);
             });
-
-            if (!dados.pastas.length && !dados.arquivos.length) {
-                ul.innerHTML = '<li class="empty-msg">Nenhum arquivo .gcode encontrado.</li>';
-            }
         }
 
         function selecionarArquivo(elemento, nomeArquivo) {
             document.querySelectorAll('#listaGcodes li').forEach(i => i.classList.remove('selecionado'));
             elemento.classList.add('selecionado');
-            
             const btn = document.getElementById('btnEnviar');
             btn.disabled = false;
-            btn.className = 'btn-enviar active';
+            btn.classList.add('active');
             btn.dataset.arquivo = pastaAtual + (pastaAtual ? '\\' : '') + nomeArquivo; 
-            btn.innerText = `IMPRIMIR: ${nomeArquivo}`;
+            btn.innerText = `IMPRIMIR AGORA`;
         }
 
         function voltarPasta() {
-            if(!pastaAtual) return;
             const partes = pastaAtual.split('\\');
             partes.pop();
             carregarPasta(partes.join('\\'));
@@ -203,36 +201,67 @@
         function resetBotaoEnviar() {
             const btn = document.getElementById('btnEnviar');
             btn.disabled = true;
-            btn.className = 'btn-bloqueado';
+            btn.classList.remove('active');
             btn.innerText = "SELECIONE UM ARQUIVO";
         }
 
-        // --- 3. Execução de Impressão ---
+        // --- 3. Execução de Impressão com Polling ---
         document.getElementById('btnEnviar').onclick = function() {
             const arquivo = this.dataset.arquivo;
-            if(!confirm(`Deseja iniciar a impressão de: ${arquivo}?`)) return;
-            
+            const ip = impressoraSelecionada;
+            if(!confirm(`Iniciar impressão de: ${arquivo}?`)) return;
+
+            document.querySelector('.file-explorer-container').style.display = 'none';
+            document.getElementById('containerProgresso').style.display = 'block';
+            this.disabled = true;
+            this.innerText = "TRANSFERINDO...";
+            this.classList.add('loading');
+
             fetch('/imprimir', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ ip: impressoraSelecionada, arquivo: arquivo })
+                body: JSON.stringify({ ip: ip, arquivo: arquivo })
             })
             .then(r => r.json())
             .then(res => {
                 if(res.success) {
-                    fecharModal();
+                    pollingUpload = setInterval(() => {
+                        fetch(`/progresso_transmissao/${ip}`)
+                        .then(r => r.json())
+                        .then(d => {
+                            let p = d.progresso;
+                            if (p === -1) {
+                                alert("Erro na transmissão.");
+                                clearInterval(pollingUpload);
+                                fecharModal();
+                                return;
+                            }
+                            document.getElementById('barraProgressoUpload').style.width = p + '%';
+                            document.getElementById('porcentagemUploadTxt').innerText = p + '%';
+
+                            if(p >= 100) {
+                                clearInterval(pollingUpload);
+                                document.getElementById('statusUploadTxt').innerText = "Sucesso! Iniciando...";
+                                setTimeout(() => {
+                                    fecharModal();
+                                    atualizarStatusInstantaneo();
+                                }, 1500);
+                            }
+                        });
+                    }, 800);
                 } else {
-                    alert("Erro no servidor: " + res.message);
+                    alert("Erro: " + res.message);
+                    fecharModal();
                 }
             });
         };
 
         function fecharModal() {
+            if (pollingUpload) clearInterval(pollingUpload);
             document.getElementById('modalImprimir').style.display = "none";
         }
         
         window.onclick = e => { if (e.target.id === 'modalImprimir') fecharModal(); };
     </script>
-
 </body>
 </html>

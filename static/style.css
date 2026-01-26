@@ -3,12 +3,12 @@
    ========================================================================== */
 :root {
     /* Paleta Principal */
-    --accent-orange: #ff6d00;     /* Laranja vibrante para destaques */
-    --accent-orange-dark: #d84600; /* Laranja mais escuro para interações */
-    --bg-main: #050505;           /* Fundo da página (quase preto absoluto) */
-    --bg-card: #141414;           /* Fundo dos cartões (cinza muito escuro) */
-    --bg-card-hover: #1a1a1a;     /* Fundo do cartão ao passar o mouse */
-    --border-color: #2a2a2a;      /* Cor das bordas sutis */
+    --accent-orange: #ff6d00;      /* Laranja vibrante para destaques */
+    --accent-orange-dark: #d84600;  /* Laranja mais escuro para interações */
+    --bg-main: #050505;            /* Fundo da página (quase preto absoluto) */
+    --bg-card: #141414;            /* Fundo dos cartões (cinza muito escuro) */
+    --bg-card-hover: #1a1a1a;      /* Fundo do cartão ao passar o mouse */
+    --border-color: #2a2a2a;       /* Cor das bordas sutis */
     
     /* Texto */
     --text-primary: #ffffff;
@@ -124,7 +124,6 @@ body {
 
 .card:active { transform: scale(0.98); }
 
-/* Topo do Card */
 .card-header-row {
     display: flex;
     justify-content: space-between;
@@ -152,10 +151,9 @@ body {
 
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 
-/* Corpo do Card: Imagem em destaque */
 .card-body-row {
     display: flex;
-    flex-direction: column; /* Alinha em cima do outro */
+    flex-direction: column;
     align-items: center;
     gap: 20px;
     width: 100%;
@@ -163,29 +161,27 @@ body {
 
 .printer-thumb {
     width: 100%;
-    height: 220px;       /* Mantenha o tamanho que você deseja para a "caixa" */
-    padding: 0px;        /* <--- ALTERE AQUI: Mude de 20px para 0 ou 5px */
-    
+    height: 220px;
+    padding: 0px;
     background: rgba(0, 0, 0, 0.4); 
     border-radius: 12px;
     border: 1px solid var(--border-color);
     display: flex;
     justify-content: center;
     align-items: center;
-    overflow: hidden;    /* Garante que a imagem não "escape" pelas bordas */
+    overflow: hidden;
 }
 
 .printer-thumb img {
-    width: 100%;         /* Força a imagem a ocupar toda a largura disponível */
-    height: 100%;        /* Força a imagem a ocupar toda a altura disponível */
-    object-fit: contain; /* Mantém a proporção para não achatar a impressora */
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
 }
 
 .card:hover .printer-thumb img {
-    transform: scale(1.1); /* Zoom na imagem ao passar o mouse */
+    transform: scale(1.1);
 }
 
-/* Informações abaixo da imagem */
 .printer-info {
     text-align: center;
     width: 100%;
@@ -208,7 +204,6 @@ body {
     border: 1px solid var(--border-color);
 }
 
-/* Progresso e Arquivo */
 .progress-section {
     margin-top: 5px;
     padding-top: 15px;
@@ -321,14 +316,48 @@ body {
     background: var(--accent-orange) !important; color: #000 !important; font-weight: 700;
 }
 
-.modal-footer { padding: 25px; background: rgba(0,0,0,0.2); }
-
-.btn-action {
-    width: 100%; padding: 20px; border-radius: 15px; border: none;
-    background: var(--accent-orange); color: black; font-weight: 800; font-size: 1.1rem; cursor: pointer;
+/* --- CONFIGURAÇÃO DO BOTÃO E RODAPÉ --- */
+.modal-footer {
+    padding: 20px 25px; /* Espaçamento interno para afastar o botão das bordas */
+    background: rgba(0, 0, 0, 0.2);
+    border-top: 1px solid var(--border-color);
 }
 
-.btn-action:disabled { background: var(--border-color); color: var(--text-tertiary); }
+.btn-action {
+    width: 100%;                /* Ocupa todo o contêiner disponível */
+    padding: 18px;
+    border-radius: 15px;
+    border: none;
+    
+    background-color: var(--accent-orange);
+    color: #000;                 /* Texto preto para contraste no laranja */
+    
+    font-weight: 800;
+    font-size: 1.1rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 4px 15px rgba(255, 109, 0, 0.2);
+}
+
+.btn-action:hover:not(:disabled) {
+    background-color: var(--accent-orange-dark);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(255, 109, 0, 0.4);
+}
+
+.btn-action:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+.btn-action:disabled { 
+    background: var(--border-color); 
+    color: var(--text-tertiary); 
+    cursor: not-allowed;
+    box-shadow: none;
+}
 
 /* ==========================================================================
    5. Media Queries (Responsividade)
@@ -338,7 +367,7 @@ body {
     .company-logo { height: 45px; }
     .grid-responsive { grid-template-columns: 1fr; }
     .modal-window { height: 100vh; border-radius: 0; }
-    .printer-thumb { height: 180px; } /* Ajuste de imagem no celular */
+    .printer-thumb { height: 180px; }
 }
 
 @media (min-width: 1025px) {
@@ -351,3 +380,71 @@ body {
 ::-webkit-scrollbar-track { background: var(--bg-main); }
 ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 10px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--accent-orange); }
+
+/* ==========================================================================
+   6. Barra de Carregamento (Upload de Arquivos)
+   ========================================================================== */
+.upload-container {
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    margin: 20px 25px;
+    padding: 20px;
+    animation: fadeIn 0.3s ease-out;
+}
+
+.progress-label-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+}
+
+#statusUploadTxt { color: var(--text-secondary); }
+#porcentagemUploadTxt { color: var(--accent-orange); font-weight: 700; }
+
+.upload-track {
+    width: 100%;
+    height: 12px;
+    background: #000;
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: inset 0 1px 4px rgba(0,0,0,0.8);
+}
+
+.upload-fill {
+    width: 0%;
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-orange-dark), var(--accent-orange));
+    transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 0 15px rgba(255, 109, 0, 0.4);
+    position: relative;
+}
+
+.upload-fill::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+    animation: progressScan 2s infinite;
+}
+
+.btn-action.loading {
+    background: var(--bg-card) !important;
+    color: var(--text-tertiary) !important;
+    border: 1px solid var(--border-color);
+    cursor: wait;
+    pointer-events: none;
+}
+
+@keyframes progressScan {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
