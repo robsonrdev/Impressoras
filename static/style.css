@@ -537,102 +537,68 @@ body {
     box-shadow: 0 0 8px rgba(255, 152, 0, 0.5);
 }
 
-/* --- Overlay de Tela Cheia --- */
+/* --- Overlay de Sucesso (Estilo Mercado Pago) --- */
 .fullscreen-overlay {
     position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(135deg, #ff9800, #f57c00); /* Laranja degradê vibrante */
-    z-index: 9999; /* Fica por cima de tudo, inclusive do modal */
+    top: 0; left: 0;
+    width: 100vw; height: 100vh;
+    background: linear-gradient(135deg, #ff9800, #f57c00); /* Laranja Vibrante */
+    z-index: 10000; /* Acima de TUDO */
     display: flex;
-    justify-content: center;
-    align-items: center;
-    opacity: 0;
-    visibility: hidden;
-    transition: opacity 0.5s ease, visibility 0.5s;
+    justify-content: center; align-items: center;
+    opacity: 0; visibility: hidden;
+    transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Classe para ativar a tela cheia */
 .fullscreen-overlay.show {
-    opacity: 1;
-    visibility: visible;
+    opacity: 1; visibility: visible;
 }
 
-/* Conteúdo Centralizado */
-.success-content {
-    text-align: center;
-    color: #fff; /* Texto branco para contraste */
-    transform: translateY(20px);
-    opacity: 0;
-    transition: all 0.8s cubic-bezier(0.22, 1, 0.36, 1); /* Efeito "pop" suave */
-}
-
-.fullscreen-overlay.show .success-content {
-    transform: translateY(0);
-    opacity: 1;
-    transition-delay: 0.2s; /* Entra um pouco depois do fundo */
-}
-
-/* --- Ícone de Check Sofisticado (SVG) --- */
+/* Ícone de Check Sofisticado */
 .sophisticated-check svg {
-    width: 150px; /* Ícone grande */
-    height: 150px;
-    display: block;
-    margin: 0 auto 30px;
+    width: 150px; height: 150px;
+    filter: drop-shadow(0 10px 20px rgba(0,0,0,0.15));
 }
 
-/* Círculo de Fundo Branco */
 .bg-circle {
-    fill: #fff;
-    stroke: #fff;
-    stroke-width: 2;
+    fill: #ffffff; /* Círculo Branco */
+    transform: scale(0);
     transform-origin: center;
-    transform: scale(0); /* Começa invisível */
 }
 
-/* O Check Laranja Grosso */
 .check-path {
     fill: none;
-    stroke: #ff9800; /* Check laranja */
+    stroke: #ff9800; /* Check Laranja Grosso */
     stroke-width: 8;
     stroke-linecap: round;
     stroke-linejoin: round;
     stroke-dasharray: 100;
-    stroke-dashoffset: 100; /* Começa "apagado" */
+    stroke-dashoffset: 100;
 }
 
-/* Animação ao ativar */
 .fullscreen-overlay.show .bg-circle {
-    animation: circle-pop 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
-    animation-delay: 0.3s;
+    animation: pop-in 0.6s 0.2s cubic-bezier(0.17, 0.89, 0.32, 1.49) forwards;
 }
 
 .fullscreen-overlay.show .check-path {
-    animation: check-draw-stroke 0.8s ease-out forwards;
-    animation-delay: 0.7s; /* Desenha depois que o círculo aparece */
+    animation: draw-check 0.8s 0.7s ease-out forwards;
 }
 
-/* Textos */
+@keyframes pop-in { to { transform: scale(1); } }
+@keyframes draw-check { to { stroke-dashoffset: 0; } }
+
 .success-title {
-    font-size: 2.5rem;
+    color: white;
+    font-size: 2.2rem;
     font-weight: 800;
-    margin-bottom: 10px;
-    text-transform: uppercase;
-    letter-spacing: 2px;
+    margin-top: 30px;
+    text-shadow: 0 2px 10px rgba(0,0,0,0.1);
 }
 
-.success-subtitle {
-    font-size: 1.2rem;
-    opacity: 0.9;
-}
-
-/* --- Keyframes das Animações --- */
-@keyframes circle-pop {
-    to { transform: scale(1); }
-}
-
-@keyframes check-draw-stroke {
-    to { stroke-dashoffset: 0; }
+/* --- Ajuste de Grid para 15 Impressoras --- */
+.grid-responsive {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 20px;
+    padding-bottom: 50px; /* Garante que a última linha não seja cortada */
 }
