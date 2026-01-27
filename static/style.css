@@ -448,3 +448,87 @@ body {
     from { opacity: 0; transform: translateY(10px); }
     to { opacity: 1; transform: translateY(0); }
 }
+
+.stats-bar {
+    background: rgba(30, 30, 30, 0.6);
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 8px 16px;
+    margin: 10px 0;
+    display: inline-block;
+}
+
+.stat-group {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.9rem;
+}
+
+/* Removido o brilho excessivo (text-shadow reduzido) */
+#countDisp {
+    color: #2ecc71;
+    text-shadow: 0 0 4px rgba(46, 204, 113, 0.3);
+    font-weight: bold;
+}
+
+#countTotal {
+    color: #f39c12;
+    text-shadow: 0 0 4px rgba(243, 156, 18, 0.3);
+    font-weight: bold;
+}
+
+.stat-divider {
+    color: #444;
+}
+
+/* Ajuste Mobile para os contadores */
+@media (max-width: 600px) {
+    .stat-group {
+        flex-direction: column;
+        gap: 5px;
+        align-items: flex-start;
+    }
+    .stat-divider {
+        display: none;
+    }
+}
+
+/* Status IMPRIMINDO Chamativo */
+.card.printing .status-badge {
+    background: rgba(255, 152, 0, 0.15); /* Fundo laranja sutil */
+    border: 1px solid rgba(255, 152, 0, 0.4);
+    padding: 5px 14px;
+    border-radius: 20px;
+    box-shadow: 0 0 10px rgba(255, 152, 0, 0.1);
+}
+
+.card.printing .status-text {
+    color: #ff9800 !important; /* Laranja Vibrante */
+    font-weight: 800 !important;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    text-shadow: 0 0 8px rgba(255, 152, 0, 0.3);
+}
+
+/* Ponto de Status Pulsante */
+.status-dot.printing {
+    background-color: #ff9800;
+    box-shadow: 0 0 12px #ff9800;
+    width: 10px;
+    height: 10px;
+    animation: pulse-striking 1.5s infinite;
+}
+
+@keyframes pulse-striking {
+    0% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.6; transform: scale(1.2); }
+    100% { opacity: 1; transform: scale(1); }
+}
+
+/* Ajuste na Barra de Progresso do Card para combinar */
+.card.printing .progress-bar-fill {
+    background: linear-gradient(90deg, #f39c12, #ff9800);
+    box-shadow: 0 0 8px rgba(255, 152, 0, 0.5);
+}

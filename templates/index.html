@@ -14,6 +14,13 @@
             <div class="logo-area">
                 <img src="/static/img/logo.png" alt="Logo" class="company-logo" onerror="this.style.backgroundColor='#333';">
             </div>
+            
+            <div class="stats-bar">
+                <div class="stat-group">
+                    <span class="stat-item">🟢 Impressoras Prontas: <strong id="countDisp">{{ disponiveis }}</strong></span>
+                </div>
+            </div>
+
             <div class="header-title">
                 <h1>Central de Impressão <span class="highlight">PRO</span></h1>
                 <p>Monitoramento e Controle de Farm</p>
@@ -80,7 +87,7 @@
 
             <div id="containerProgresso" class="upload-container" style="display: none;">
                 <div class="progress-label-row">
-                    <span id="statusUploadTxt">Transmitindo para impressora...</span>
+                    <span id="statusUploadTxt">Iniciando...</span>
                     <span id="porcentagemUploadTxt">0%</span>
                 </div>
                 <div class="upload-track">
@@ -99,19 +106,23 @@
         let pastaAtual = '';
         let pollingUpload = null;
 
-        // --- 1. Sincronização de Status (Dashboard) ---
         function atualizarStatusInstantaneo() {
             fetch('/status_atualizado')
                 .then(r => r.json())
-                .then(impressoras => {
-                    Object.entries(impressoras).forEach(([ip, dados]) => {
+                .then(data => {
+                    const dispEl = document.getElementById('countDisp');
+                    if(dispEl) dispEl.innerText = data.total_disponiveis;
+
+                    Object.entries(data.impressoras).forEach(([ip, dados]) => {
                         const card = document.querySelector(`.card[onclick*="${ip}"]`);
                         if (!card) return;
 
                         card.className = `card ${dados.cor}`;
                         const dot = card.querySelector('.status-dot');
-                        dot.className = `status-dot ${dados.status === 'printing' ? 'printing' : ''}`;
-                        card.querySelector('.status-text').innerText = dados.msg;
+                        if(dot) dot.className = `status-dot ${dados.status === 'printing' ? 'printing' : ''}`;
+                        
+                        const statusTxt = card.querySelector('.status-text');
+                        if(statusTxt) statusTxt.innerText = dados.msg;
 
                         const infoDiv = card.querySelector('.info-impressao');
                         if (['printing', 'paused'].includes(dados.status)) {
@@ -127,17 +138,13 @@
         }
         setInterval(atualizarStatusInstantaneo, 2000);
 
-        // --- 2. Navegação de Arquivos ---
         function abrirModal(ip, nome) {
             impressoraSelecionada = ip;
             document.getElementById('modalImprimir').style.display = "flex";
             document.getElementById('tituloModal').innerText = `Comandar: ${nome}`;
-            
-            // Reset UI do Modal
             document.querySelector('.file-explorer-container').style.display = 'block';
             document.getElementById('containerProgresso').style.display = 'none';
             document.getElementById('btnEnviar').style.display = 'block';
-            
             pastaAtual = '';
             carregarPasta(''); 
             resetBotaoEnviar();
@@ -146,14 +153,11 @@
         function carregarPasta(caminho) {
             const ul = document.getElementById('listaGcodes');
             ul.innerHTML = '<li class="loading-msg">Consultando...</li>';
-
             fetch('/navegar', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ pasta: caminho })
-            })
-            .then(r => r.json())
-            .then(dados => {
+            }).then(r => r.json()).then(dados => {
                 pastaAtual = dados.atual;
                 renderizarArquivos(dados);
             });
@@ -164,7 +168,6 @@
             ul.innerHTML = ''; 
             document.getElementById('caminhoAtual').innerText = dados.atual || 'Raiz (gcodes)';
             document.getElementById('btnVoltar').disabled = (dados.atual === '');
-
             dados.pastas.forEach(p => {
                 const li = document.createElement('li');
                 li.className = 'item-pasta';
@@ -172,7 +175,6 @@
                 li.onclick = () => carregarPasta(pastaAtual + (pastaAtual ? '\\' : '') + p);
                 ul.appendChild(li);
             });
-
             dados.arquivos.forEach(arq => {
                 const li = document.createElement('li');
                 li.className = 'item-arquivo';
@@ -205,7 +207,6 @@
             btn.innerText = "SELECIONE UM ARQUIVO";
         }
 
-        // --- 3. Execução de Impressão com Polling ---
         document.getElementById('btnEnviar').onclick = function() {
             const arquivo = this.dataset.arquivo;
             const ip = impressoraSelecionada;
@@ -214,7 +215,7 @@
             document.querySelector('.file-explorer-container').style.display = 'none';
             document.getElementById('containerProgresso').style.display = 'block';
             this.disabled = true;
-            this.innerText = "TRANSFERINDO...";
+            this.innerText = "AGUARDE...";
             this.classList.add('loading');
 
             fetch('/imprimir', {
@@ -229,19 +230,22 @@
                         fetch(`/progresso_transmissao/${ip}`)
                         .then(r => r.json())
                         .then(d => {
-                            let p = d.progresso;
+                            let p = d.p; 
+                            let msg = d.msg; 
+
                             if (p === -1) {
-                                alert("Erro na transmissão.");
+                                alert("Erro: " + msg);
                                 clearInterval(pollingUpload);
                                 fecharModal();
                                 return;
                             }
+
                             document.getElementById('barraProgressoUpload').style.width = p + '%';
                             document.getElementById('porcentagemUploadTxt').innerText = p + '%';
+                            document.getElementById('statusUploadTxt').innerText = msg;
 
                             if(p >= 100) {
                                 clearInterval(pollingUpload);
-                                document.getElementById('statusUploadTxt').innerText = "Sucesso! Iniciando...";
                                 setTimeout(() => {
                                     fecharModal();
                                     atualizarStatusInstantaneo();
