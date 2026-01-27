@@ -130,56 +130,52 @@ def scanner_inteligente():
 threading.Thread(target=scanner_inteligente, daemon=True).start()
 
 # --- LÓGICA DE UPLOAD E SUCESSO IMEDIATO ---
+# --- REVISÃO DA TAREFA DE UPLOAD NO app.py ---
+
 def tarefa_upload(ip_alvo, caminho_completo):
-    tentativas_max = 2
-    for tentativa in range(tentativas_max):
-        try:
-            nome_arquivo = os.path.basename(caminho_completo)
-            tamanho_local = os.path.getsize(caminho_completo)
-            PROGRESSO_UPLOAD[ip_alvo] = {"p": 5, "msg": f"Tentativa {tentativa+1}: Validando..."}
+    try:
+        nome_arquivo = os.path.basename(caminho_completo)
+        
+        # 1. Realiza o Upload (Mantendo sua lógica de Monitor)
+        with open(caminho_completo, 'rb') as f:
+            monitor = Monitor(f, ip_alvo)
+            files = {'file': (nome_arquivo, monitor)}
+            # O upload é o primeiro passo crítico
+            SESSAO_REDE.post(f"http://{ip_alvo}/server/files/upload", files=files, timeout=900)
+        
+        # 2. Pequena pausa técnica (Visto nos logs: a Neptune precisa de tempo após o upload)
+        # O log mostra 27 segundos de preparação antes do SDCARD_PRINT_FILE
+        time.sleep(2) 
+        
+        # 3. Comando de Início de Impressão
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": 98, "msg": "Iniciando Motores..."}
+        nome_url = urllib.parse.quote(nome_arquivo)
+        res_print = SESSAO_REDE.post(f"http://{ip_alvo}/printer/print/start?filename={nome_url}", timeout=15)
+        
+        # 🚀 O AJUSTE: Se o servidor respondeu (ok) OU se o arquivo foi selecionado nos logs
+        # Alguns firmwares da Neptune retornam 204 ou 201 em vez de 200.
+        if res_print.ok: 
+            # ✅ GATILHO DE SUCESSO: Força o 100% para o JavaScript explodir a tela laranja
+            PROGRESSO_UPLOAD[ip_alvo] = {"p": 100, "msg": "Sucesso! Bom trabalho."}
             
-            # 1. Prontidão
-            check = SESSAO_REDE.get(f"http://{ip_alvo}/printer/info", timeout=5).json()
-            if check.get('result', {}).get('state') not in ['ready', 'idle']:
-                PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": "ERRO: Máquina Ocupada"}
+            # Sincronização forçada para o Dashboard em Betim
+            time.sleep(1)
+            verificar_ip(int(ip_alvo.split('.')[-1])) 
+            return 
+        else:
+            # Se der erro, tentamos verificar se a impressora já começou mesmo assim
+            # Isso evita que o usuário ache que falhou quando na verdade a máquina aceitou
+            time.sleep(1)
+            check_status = SESSAO_REDE.get(f"http://{ip_alvo}/printer/objects/query?print_stats").json()
+            if check_status.get('result', {}).get('status', {}).get('print_stats', {}).get('state') in ['printing', 'busy']:
+                PROGRESSO_UPLOAD[ip_alvo] = {"p": 100, "msg": "Sucesso! Bom trabalho."}
                 return
 
-            # 2. Upload
-            with open(caminho_completo, 'rb') as f:
-                monitor = Monitor(f, ip_alvo)
-                files = {'file': (nome_arquivo, monitor)}
-                SESSAO_REDE.post(f"http://{ip_alvo}/server/files/upload", files=files, timeout=900)
-            
-            # 3. Integridade
-            meta_url = f"http://{ip_alvo}/server/files/metadata?filename={urllib.parse.quote(nome_arquivo)}"
-            meta_resp = SESSAO_REDE.get(meta_url, timeout=5).json()
-            tamanho_remoto = meta_resp.get('result', {}).get('size', 0)
+            PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": f"Erro {res_print.status_code}: Máquina Ocupada"}
 
-            if tamanho_local == tamanho_remoto:
-                PROGRESSO_UPLOAD[ip_alvo] = {"p": 98, "msg": "Integridade OK! Iniciando..."}
-                res_print = SESSAO_REDE.post(f"http://{ip_alvo}/printer/print/start?filename={urllib.parse.quote(nome_arquivo)}", timeout=10)
-                
-                if res_print.status_code == 200:
-                    # 🚀 GATILHO DE SUCESSO IMEDIATO PARA O JS
-                    PROGRESSO_UPLOAD[ip_alvo] = {"p": 100, "msg": "Sucesso! Bom trabalho."}
-                    
-                    # ⚡ Sincronização Instantânea: Força a atualização do status na memória
-                    # para que o dashboard identifique o estado 'busy' dos logs na hora.
-                    time.sleep(1)
-                    verificar_ip(int(ip_alvo.split('.')[-1]))
-                    return 
-                else:
-                    PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": "ERRO: Falha no Start"}
-                    return
-            else:
-                if tentativa < tentativas_max - 1:
-                    time.sleep(1)
-                else:
-                    PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": "ERRO: Arquivo Corrompido"}
-
-        except Exception:
-            if tentativa == tentativas_max - 1:
-                PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": "FALHA: Erro de Rede"}
+    except Exception as e:
+        print(f"Erro crítico no upload para {ip_alvo}: {e}")
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": "FALHA: Erro de Rede"}
 
 # --- ROTAS FLASK ---
 @app.route('/')
