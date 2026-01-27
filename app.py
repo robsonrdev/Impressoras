@@ -138,47 +138,42 @@ def tarefa_upload(ip_alvo, caminho_completo):
     try:
         nome_arquivo = os.path.basename(caminho_completo)
         
-        # 1. Upload do Arquivo
+        # 1. Realiza o Upload (0-90%)
         with open(caminho_completo, 'rb') as f:
             monitor = Monitor(f, ip_alvo)
             files = {'file': (nome_arquivo, monitor)}
             SESSAO_REDE.post(f"http://{ip_alvo}/server/files/upload", files=files, timeout=900)
         
-        # 2. Pequena pausa para o Moonraker processar o arquivo (Metadata)
+        # 2. Pequena pausa para o Moonraker registrar o arquivo
         time.sleep(1.5) 
         
-        # 3. Envia o comando de Start
+        # 🚀 3. O PONTO DE GATILHO (Foco Total no Código)
+        # No momento em que este status aparece, a impressora já recebe o sinal
         PROGRESSO_UPLOAD[ip_alvo] = {"p": 95, "msg": "Enviando comando de início..."}
-        nome_url = urllib.parse.quote(nome_arquivo)
-        SESSAO_REDE.post(f"http://{ip_alvo}/printer/print/start?filename={nome_url}", timeout=10)
         
-        # 🚀 4. O NOVO GATILHO: Loop de Vigilância (Vigia o log 'preparing for print')
-        # Vamos checar o status a cada 500ms por até 10 segundos
-        for _ in range(20): 
-            time.sleep(0.5)
-            try:
-                # Consultamos o estado atual do Klipper
-                check = SESSAO_REDE.get(f"http://{ip_alvo}/printer/objects/query?print_stats", timeout=2).json()
-                estado_real = check.get('result', {}).get('status', {}).get('print_stats', {}).get('state')
-                
-                # Se o estado for 'busy' ou 'printing', é porque o log 'preparing for print' aconteceu!
-                if estado_real in ['busy', 'printing']:
-                    print(f"✅ [GATILHO] Impressora {ip_alvo} entrou em PREPARAÇÃO.")
-                    
-                    # DISPARA A TELA DE SUCESSO (p: 100)
-                    PROGRESSO_UPLOAD[ip_alvo] = {"p": 100, "msg": "Sucesso! Bom trabalho."}
-                    
-                    # Sincroniza o dashboard imediatamente
-                    verificar_ip(int(ip_alvo.split('.')[-1])) 
-                    return
-            except:
-                continue
+        nome_url = urllib.parse.quote(nome_arquivo)
+        
+        # Envia o comando de Start. Usamos um try/except para que, 
+        # mesmo se a impressora demorar a responder (timeout), o fluxo siga.
+        try:
+            SESSAO_REDE.post(f"http://{ip_alvo}/printer/print/start?filename={nome_url}", timeout=10)
+        except Exception:
+            # Se der timeout mas a máquina começou a mexer (como você observou), ignoramos o erro
+            pass
 
-        # Failsafe: Se passar 10s e não detectar, mas não deu erro, assume sucesso
+        # ⏳ 4. O TEMPO DE ESPERA SOLICITADO
+        # A impressora já está se movendo em Betim. Esperamos 1s para o efeito visual.
+        time.sleep(1) 
+        
+        # ✅ SUCESSO FORÇADO PELO CÓDIGO (Trigger p: 100)
+        # Isso faz o JavaScript disparar a tela laranja imediatamente
         PROGRESSO_UPLOAD[ip_alvo] = {"p": 100, "msg": "Sucesso! Bom trabalho."}
+        
+        # Sincronização em segundo plano para o card atualizar depois
+        verificar_ip(int(ip_alvo.split('.')[-1]))
 
     except Exception as e:
-        print(f"❌ Erro no upload: {e}")
+        print(f"Erro no fluxo de upload para {ip_alvo}: {e}")
         PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": "FALHA: Erro de Rede"}
 
 # --- ROTAS FLASK ---
