@@ -17,8 +17,8 @@
                     <path class="check-path" d="M30 50 L45 65 L70 35"/>
                 </svg>
             </div>
-            <h1 class="success-title">VINCULADO COM SUCESSO!</h1>
-            <p id="subtituloSucesso" class="success-subtitle">Sua impressão foi enviada.</p>
+            <h1 class="success-title">Concluido</h1>
+            <p id="subtituloSucesso" class="success-subtitle">Preparando impressora</p>
         </div>
     </div>
 
@@ -107,182 +107,222 @@
         </div>
     </div>
 
-    <script>
-        // --- ESTADO GLOBAL ÚNICO ---
-        let impressoraSelecionada = '';
-        let pastaAtual = '';
-        let pollingUpload = null;
+<script>
+    // --- ESTADO GLOBAL ÚNICO ---
+    let impressoraSelecionada = '';
+    let pastaAtual = '';
+    let pollingUpload = null;
+    let isPollingPaused = false; // 🚀 Chave para foco total no upload
 
-        function atualizarStatusInstantaneo() {
-            fetch('/status_atualizado')
-                .then(r => r.json())
-                .then(data => {
-                    const dispEl = document.getElementById('countDisp');
-                    if(dispEl) dispEl.innerText = data.total_disponiveis;
+    // --- 1. Sincronização de Status (Dashboard) ---
+    function atualizarStatusInstantaneo() {
+        // Se estivermos enviando um arquivo, pausamos o monitoramento geral
+        if (isPollingPaused) return; 
 
-                    Object.entries(data.impressoras).forEach(([ip, dados]) => {
-                        const card = document.querySelector(`.card[onclick*="${ip}"]`);
-                        if (!card) return;
-
-                        card.className = `card ${dados.cor}`;
-                        const dot = card.querySelector('.status-dot');
-                        if(dot) dot.className = `status-dot ${dados.status === 'printing' ? 'printing' : ''}`;
-                        
-                        const statusTxt = card.querySelector('.status-text');
-                        if(statusTxt) statusTxt.innerText = dados.msg;
-
-                        const infoDiv = card.querySelector('.info-impressao');
-                        if (['printing', 'paused'].includes(dados.status)) {
-                            infoDiv.style.display = 'block';
-                            card.querySelector('.barra-progresso').style.width = dados.progresso + '%';
-                        } else {
-                            infoDiv.style.display = 'none';
-                        }
-                    });
-                }).catch(err => console.error("Erro na telemetria:", err));
-        }
-        setInterval(atualizarStatusInstantaneo, 2000);
-
-        function abrirModal(ip, nome) {
-            impressoraSelecionada = ip;
-            document.getElementById('modalImprimir').style.display = "flex";
-            document.getElementById('tituloModal').innerText = `Comandar: ${nome}`;
-            document.querySelector('.close-btn').style.visibility = 'visible';
-            document.querySelector('.file-explorer-container').style.display = 'block';
-            document.getElementById('containerProgresso').style.display = 'none';
-            document.getElementById('btnEnviar').style.display = 'block';
-            document.getElementById('fullScreenSuccess').classList.remove('show');
-            pastaAtual = '';
-            carregarPasta(''); 
-            resetBotaoEnviar();
-        }
-
-        function carregarPasta(caminho) {
-            const ul = document.getElementById('listaGcodes');
-            ul.innerHTML = '<li class="loading-msg">Consultando...</li>';
-            fetch('/navegar', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ pasta: caminho })
-            }).then(r => r.json()).then(dados => {
-                pastaAtual = dados.atual;
-                renderizarArquivos(dados);
-            });
-        }
-
-        function renderizarArquivos(dados) {
-            const ul = document.getElementById('listaGcodes');
-            ul.innerHTML = ''; 
-            document.getElementById('caminhoAtual').innerText = dados.atual || 'Raiz (gcodes)';
-            document.getElementById('btnVoltar').disabled = (dados.atual === '');
-            dados.pastas.forEach(p => {
-                const li = document.createElement('li');
-                li.className = 'item-pasta';
-                li.innerHTML = `<span>📁</span> <strong>${p}</strong>`;
-                li.onclick = () => carregarPasta(pastaAtual + (pastaAtual ? '\\' : '') + p);
-                ul.appendChild(li);
-            });
-            dados.arquivos.forEach(arq => {
-                const li = document.createElement('li');
-                li.className = 'item-arquivo';
-                li.innerHTML = `<span>📄</span> ${arq}`;
-                li.onclick = () => selecionarArquivo(li, arq);
-                ul.appendChild(li);
-            });
-        }
-
-        function selecionarArquivo(elemento, nomeArquivo) {
-            document.querySelectorAll('#listaGcodes li').forEach(i => i.classList.remove('selecionado'));
-            elemento.classList.add('selecionado');
-            const btn = document.getElementById('btnEnviar');
-            btn.disabled = false;
-            btn.classList.add('active');
-            btn.dataset.arquivo = pastaAtual + (pastaAtual ? '\\' : '') + nomeArquivo; 
-            btn.innerText = `IMPRIMIR AGORA`;
-        }
-
-        function voltarPasta() {
-            const partes = pastaAtual.split('\\');
-            partes.pop();
-            carregarPasta(partes.join('\\'));
-        }
-
-        function resetBotaoEnviar() {
-            const btn = document.getElementById('btnEnviar');
-            btn.disabled = true;
-            btn.classList.remove('active');
-            btn.innerText = "SELECIONE UM ARQUIVO";
-        }
-
-        document.getElementById('btnEnviar').onclick = function() {
-            const arquivo = this.dataset.arquivo;
-            const ip = impressoraSelecionada;
-            const nomeImpressora = document.getElementById('tituloModal').innerText.replace('Comandar: ', '');
-            if(!confirm(`Iniciar impressão de: ${arquivo}?`)) return;
-
-            document.querySelector('.file-explorer-container').style.display = 'none';
-            document.getElementById('containerProgresso').style.display = 'block';
-            document.querySelector('.close-btn').style.visibility = 'hidden';
-            this.disabled = true;
-            this.innerText = "AGUARDE...";
-
-            fetch('/imprimir', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ ip: ip, arquivo: arquivo })
-            })
+        fetch('/status_atualizado')
             .then(r => r.json())
-            .then(res => {
-                if(res.success) {
-                    pollingUpload = setInterval(() => {
-                        fetch(`/progresso_transmissao/${ip}`)
-                        .then(r => r.json())
-                        .then(d => {
-                            let p = d.p; 
-                            let msg = d.msg; 
-                            if (p === -1) {
-                                alert("Erro: " + msg);
-                                clearInterval(pollingUpload);
-                                pollingUpload = null;
-                                fecharModal();
-                                return;
-                            }
-                            document.getElementById('barraProgressoUpload').style.width = p + '%';
-                            document.getElementById('porcentagemUploadTxt').innerText = p + '%';
-                            document.getElementById('statusUploadTxt').innerText = msg;
+            .then(data => {
+                const dispEl = document.getElementById('countDisp');
+                if(dispEl) dispEl.innerText = data.total_disponiveis;
 
-                            if(p >= 100) {
-                                clearInterval(pollingUpload);
-                                pollingUpload = null;
-                                document.getElementById('subtituloSucesso').innerText = `Enviado para ${nomeImpressora}...`;
-                                document.getElementById('fullScreenSuccess').classList.add('show');
-                                setTimeout(() => {
-                                    document.getElementById('fullScreenSuccess').classList.remove('show');
-                                    fecharModal();
-                                    atualizarStatusInstantaneo();
-                                }, 4000);
-                            }
-                        });
-                    }, 800);
-                } else { alert("Erro: " + res.message); fecharModal(); }
-            });
-        };
+                Object.entries(data.impressoras).forEach(([ip, dados]) => {
+                    const card = document.querySelector(`.card[onclick*="${ip}"]`);
+                    if (!card) return;
 
-        function fecharModal() {
-            if (pollingUpload) return; 
-            document.getElementById('modalImprimir').style.display = "none";
-        }
+                    card.className = `card ${dados.cor}`;
+                    const dot = card.querySelector('.status-dot');
+                    if(dot) dot.className = `status-dot ${dados.status === 'printing' ? 'printing' : ''}`;
+                    
+                    const statusTxt = card.querySelector('.status-text');
+                    if(statusTxt) statusTxt.innerText = dados.msg;
 
-        window.onclick = e => { 
-            if (e.target.id === 'modalImprimir') {
-                if (!pollingUpload) fecharModal(); 
-                else {
-                    const win = document.querySelector('.modal-window');
-                    win.style.border = '2px solid #ff9800';
-                    setTimeout(() => win.style.border = '1px solid #444', 300);
-                }
+                    const infoDiv = card.querySelector('.info-impressao');
+                    if (['printing', 'paused'].includes(dados.status)) {
+                        infoDiv.style.display = 'block';
+                        card.querySelector('.barra-progresso').style.width = dados.progresso + '%';
+                    } else {
+                        infoDiv.style.display = 'none';
+                    }
+                });
+            }).catch(err => console.error("Erro na telemetria:", err));
+    }
+    setInterval(atualizarStatusInstantaneo, 2000);
+
+    // --- 2. Gestão do Modal e Navegação (Original) ---
+    function abrirModal(ip, nome) {
+        impressoraSelecionada = ip;
+        document.getElementById('modalImprimir').style.display = "flex";
+        document.getElementById('tituloModal').innerText = `Comandar: ${nome}`;
+        document.querySelector('.close-btn').style.visibility = 'visible';
+        document.querySelector('.file-explorer-container').style.display = 'block';
+        document.getElementById('containerProgresso').style.display = 'none';
+        document.getElementById('btnEnviar').style.display = 'block';
+        document.getElementById('fullScreenSuccess').classList.remove('show');
+        pastaAtual = '';
+        carregarPasta(''); 
+        resetBotaoEnviar();
+    }
+
+    function carregarPasta(caminho) {
+        const ul = document.getElementById('listaGcodes');
+        ul.innerHTML = '<li class="loading-msg">Consultando...</li>';
+        fetch('/navegar', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ pasta: caminho })
+        }).then(r => r.json()).then(dados => {
+            pastaAtual = dados.atual;
+            renderizarArquivos(dados);
+        });
+    }
+
+    function renderizarArquivos(dados) {
+        const ul = document.getElementById('listaGcodes');
+        ul.innerHTML = ''; 
+        document.getElementById('caminhoAtual').innerText = dados.atual || 'Raiz (gcodes)';
+        document.getElementById('btnVoltar').disabled = (dados.atual === '');
+        dados.pastas.forEach(p => {
+            const li = document.createElement('li');
+            li.className = 'item-pasta';
+            li.innerHTML = `<span>📁</span> <strong>${p}</strong>`;
+            li.onclick = () => carregarPasta(pastaAtual + (pastaAtual ? '\\' : '') + p);
+            ul.appendChild(li);
+        });
+        dados.arquivos.forEach(arq => {
+            const li = document.createElement('li');
+            li.className = 'item-arquivo';
+            li.innerHTML = `<span>📄</span> ${arq}`;
+            li.onclick = () => selecionarArquivo(li, arq);
+            ul.appendChild(li);
+        });
+    }
+
+    function selecionarArquivo(elemento, nomeArquivo) {
+        document.querySelectorAll('#listaGcodes li').forEach(i => i.classList.remove('selecionado'));
+        elemento.classList.add('selecionado');
+        const btn = document.getElementById('btnEnviar');
+        btn.disabled = false;
+        btn.classList.add('active');
+        btn.dataset.arquivo = pastaAtual + (pastaAtual ? '\\' : '') + nomeArquivo; 
+        btn.innerText = `IMPRIMIR AGORA`;
+    }
+
+    function voltarPasta() {
+        const partes = pastaAtual.split('\\');
+        partes.pop();
+        carregarPasta(partes.join('\\'));
+    }
+
+    function resetBotaoEnviar() {
+        const btn = document.getElementById('btnEnviar');
+        btn.disabled = true;
+        btn.classList.remove('active');
+        btn.innerText = "SELECIONE UM ARQUIVO";
+    }
+
+    // --- 3. Execução de Envio com Foco Total ---
+    document.getElementById('btnEnviar').onclick = function() {
+        const arquivo = this.dataset.arquivo;
+        const ip = impressoraSelecionada;
+        const nomeImpressora = document.getElementById('tituloModal').innerText.replace('Comandar: ', '');
+        
+        // 🛑 O confirm vem antes para não pausar o sistema desnecessariamente
+        if(!confirm(`Iniciar impressão de: ${arquivo}?`)) return;
+
+        // 🚀 ATIVA O FOCO TOTAL: Pausa atualizações de status para priorizar o upload
+        isPollingPaused = true;
+
+        document.querySelector('.file-explorer-container').style.display = 'none';
+        document.getElementById('containerProgresso').style.display = 'block';
+        document.querySelector('.close-btn').style.visibility = 'hidden';
+        this.disabled = true;
+        this.innerText = "AGUARDE...";
+
+        fetch('/imprimir', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ ip: ip, arquivo: arquivo })
+        })
+        .then(r => r.json())
+        .then(res => {
+            if(res.success) {
+                pollingUpload = setInterval(() => {
+                    fetch(`/progresso_transmissao/${ip}`)
+                    .then(r => r.json())
+                    .then(d => {
+                        let p = d.p; 
+                        let msg = d.msg; 
+                        
+                        // Tratamento de erro retornado pela impressora
+                        if (p === -1) {
+                            alert("Erro: " + msg);
+                            clearInterval(pollingUpload);
+                            pollingUpload = null;
+                            isPollingPaused = false; // 🔓 Retoma monitoramento
+                            fecharModal();
+                            return;
+                        }
+
+                        document.getElementById('barraProgressoUpload').style.width = p + '%';
+                        document.getElementById('porcentagemUploadTxt').innerText = p + '%';
+                        document.getElementById('statusUploadTxt').innerText = msg;
+
+                        // Gatilho de Sucesso (Transmissão Concluída)
+                        if(p >= 100) {
+                            clearInterval(pollingUpload);
+                            pollingUpload = null; 
+
+                            const overlay = document.getElementById('fullScreenSuccess');
+                            const subtitulo = document.getElementById('subtituloSucesso');
+                            subtitulo.innerText = `Preparando ${nomeImpressora}!`;
+                            subtitulo.style.color = "#fff";
+
+                            overlay.classList.add('show');
+                            fecharModal(); 
+
+                            setTimeout(() => {
+                                overlay.classList.remove('show');
+                                // 🔓 SUCESSO: Retoma o monitoramento global
+                                isPollingPaused = false; 
+                                atualizarStatusInstantaneo(); 
+                            }, 3500);
+                        }
+                    })
+                    .catch(err => {
+                        // 🔓 ERRO DE REDE: Destrava para não "congelar" o painel
+                        console.error("Erro no polling de upload:", err);
+                        clearInterval(pollingUpload);
+                        pollingUpload = null;
+                        isPollingPaused = false; 
+                        fecharModal();
+                    });
+                }, 800);
+            } else { 
+                alert("Erro: " + res.message); 
+                isPollingPaused = false; // 🔓 Retoma status se o envio falhar
+                fecharModal(); 
             }
-        };
-    </script>
+        }).catch(err => {
+            isPollingPaused = false; // 🔓 Retoma status em erro de rede inicial
+            console.error(err);
+        });
+    };
+
+    function fecharModal() {
+        if (pollingUpload) return; 
+        document.getElementById('modalImprimir').style.display = "none";
+    }
+
+    window.onclick = e => { 
+        if (e.target.id === 'modalImprimir') {
+            if (!pollingUpload) fecharModal(); 
+            else {
+                const win = document.querySelector('.modal-window');
+                win.style.border = '2px solid #ff9800';
+                setTimeout(() => win.style.border = '1px solid #444', 300);
+            }
+        }
+    };
+</script>
 </body>
 </html>
