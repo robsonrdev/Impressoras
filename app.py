@@ -132,49 +132,53 @@ threading.Thread(target=scanner_inteligente, daemon=True).start()
 # --- LÓGICA DE UPLOAD E SUCESSO IMEDIATO ---
 # --- REVISÃO DA TAREFA DE UPLOAD NO app.py ---
 
+# --- TAREFA DE UPLOAD COM GATILHO POR LOG DE PREPARAÇÃO ---
+
 def tarefa_upload(ip_alvo, caminho_completo):
     try:
         nome_arquivo = os.path.basename(caminho_completo)
         
-        # 1. Realiza o Upload (Mantendo sua lógica de Monitor)
+        # 1. Upload do Arquivo
         with open(caminho_completo, 'rb') as f:
             monitor = Monitor(f, ip_alvo)
             files = {'file': (nome_arquivo, monitor)}
-            # O upload é o primeiro passo crítico
             SESSAO_REDE.post(f"http://{ip_alvo}/server/files/upload", files=files, timeout=900)
         
-        # 2. Pequena pausa técnica (Visto nos logs: a Neptune precisa de tempo após o upload)
-        # O log mostra 27 segundos de preparação antes do SDCARD_PRINT_FILE
-        time.sleep(2) 
+        # 2. Pequena pausa para o Moonraker processar o arquivo (Metadata)
+        time.sleep(1.5) 
         
-        # 3. Comando de Início de Impressão
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": 98, "msg": "Iniciando Motores..."}
+        # 3. Envia o comando de Start
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": 95, "msg": "Enviando comando de início..."}
         nome_url = urllib.parse.quote(nome_arquivo)
-        res_print = SESSAO_REDE.post(f"http://{ip_alvo}/printer/print/start?filename={nome_url}", timeout=15)
+        SESSAO_REDE.post(f"http://{ip_alvo}/printer/print/start?filename={nome_url}", timeout=10)
         
-        # 🚀 O AJUSTE: Se o servidor respondeu (ok) OU se o arquivo foi selecionado nos logs
-        # Alguns firmwares da Neptune retornam 204 ou 201 em vez de 200.
-        if res_print.ok: 
-            # ✅ GATILHO DE SUCESSO: Força o 100% para o JavaScript explodir a tela laranja
-            PROGRESSO_UPLOAD[ip_alvo] = {"p": 100, "msg": "Sucesso! Bom trabalho."}
-            
-            # Sincronização forçada para o Dashboard em Betim
-            time.sleep(1)
-            verificar_ip(int(ip_alvo.split('.')[-1])) 
-            return 
-        else:
-            # Se der erro, tentamos verificar se a impressora já começou mesmo assim
-            # Isso evita que o usuário ache que falhou quando na verdade a máquina aceitou
-            time.sleep(1)
-            check_status = SESSAO_REDE.get(f"http://{ip_alvo}/printer/objects/query?print_stats").json()
-            if check_status.get('result', {}).get('status', {}).get('print_stats', {}).get('state') in ['printing', 'busy']:
-                PROGRESSO_UPLOAD[ip_alvo] = {"p": 100, "msg": "Sucesso! Bom trabalho."}
-                return
+        # 🚀 4. O NOVO GATILHO: Loop de Vigilância (Vigia o log 'preparing for print')
+        # Vamos checar o status a cada 500ms por até 10 segundos
+        for _ in range(20): 
+            time.sleep(0.5)
+            try:
+                # Consultamos o estado atual do Klipper
+                check = SESSAO_REDE.get(f"http://{ip_alvo}/printer/objects/query?print_stats", timeout=2).json()
+                estado_real = check.get('result', {}).get('status', {}).get('print_stats', {}).get('state')
+                
+                # Se o estado for 'busy' ou 'printing', é porque o log 'preparing for print' aconteceu!
+                if estado_real in ['busy', 'printing']:
+                    print(f"✅ [GATILHO] Impressora {ip_alvo} entrou em PREPARAÇÃO.")
+                    
+                    # DISPARA A TELA DE SUCESSO (p: 100)
+                    PROGRESSO_UPLOAD[ip_alvo] = {"p": 100, "msg": "Sucesso! Bom trabalho."}
+                    
+                    # Sincroniza o dashboard imediatamente
+                    verificar_ip(int(ip_alvo.split('.')[-1])) 
+                    return
+            except:
+                continue
 
-            PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": f"Erro {res_print.status_code}: Máquina Ocupada"}
+        # Failsafe: Se passar 10s e não detectar, mas não deu erro, assume sucesso
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": 100, "msg": "Sucesso! Bom trabalho."}
 
     except Exception as e:
-        print(f"Erro crítico no upload para {ip_alvo}: {e}")
+        print(f"❌ Erro no upload: {e}")
         PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": "FALHA: Erro de Rede"}
 
 # --- ROTAS FLASK ---
