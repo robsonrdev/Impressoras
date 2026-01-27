@@ -9,6 +9,19 @@
 </head>
 <body>
 
+    <div id="fullScreenSuccess" class="fullscreen-overlay">
+        <div class="success-content">
+            <div class="sophisticated-check">
+                <svg viewBox="0 0 100 100">
+                    <circle class="bg-circle" cx="50" cy="50" r="45"/>
+                    <path class="check-path" d="M30 50 L45 65 L70 35"/>
+                </svg>
+            </div>
+            <h1 class="success-title">VINCULADO COM SUCESSO!</h1>
+            <p id="subtituloSucesso" class="success-subtitle">Iniciando sua impressão...</p>
+        </div>
+    </div>
+
     <header class="main-header">
         <div class="header-container">
             <div class="logo-area">
@@ -86,6 +99,9 @@
             </div>
 
             <div id="containerProgresso" class="upload-container" style="display: none;">
+                <div id="successAnim" class="success-checkmark">
+                    <div class="check-icon"></div>
+                </div>
                 <div class="progress-label-row">
                     <span id="statusUploadTxt">Iniciando...</span>
                     <span id="porcentagemUploadTxt">0%</span>
@@ -101,171 +117,190 @@
         </div>
     </div>
 
-    <script>
-        let impressoraSelecionada = '';
-        let pastaAtual = '';
-        let pollingUpload = null;
+<script>
+    let impressoraSelecionada = '';
+    let pastaAtual = '';
+    let pollingUpload = null;
 
-        function atualizarStatusInstantaneo() {
-            fetch('/status_atualizado')
-                .then(r => r.json())
-                .then(data => {
-                    const dispEl = document.getElementById('countDisp');
-                    if(dispEl) dispEl.innerText = data.total_disponiveis;
+    function atualizarStatusInstantaneo() {
+        fetch('/status_atualizado')
+            .then(r => r.json())
+            .then(data => {
+                const dispEl = document.getElementById('countDisp');
+                if(dispEl) dispEl.innerText = data.total_disponiveis;
 
-                    Object.entries(data.impressoras).forEach(([ip, dados]) => {
-                        const card = document.querySelector(`.card[onclick*="${ip}"]`);
-                        if (!card) return;
+                Object.entries(data.impressoras).forEach(([ip, dados]) => {
+                    const card = document.querySelector(`.card[onclick*="${ip}"]`);
+                    if (!card) return;
+                    card.className = `card ${dados.cor}`;
+                    const dot = card.querySelector('.status-dot');
+                    if(dot) dot.className = `status-dot ${dados.status === 'printing' ? 'printing' : ''}`;
+                    const statusTxt = card.querySelector('.status-text');
+                    if(statusTxt) statusTxt.innerText = dados.msg;
+                    const infoDiv = card.querySelector('.info-impressao');
+                    if (['printing', 'paused'].includes(dados.status)) {
+                        infoDiv.style.display = 'block';
+                        card.querySelector('.nome-arquivo').innerText = dados.arquivo;
+                        card.querySelector('.barra-progresso').style.width = `${dados.progresso}%`;
+                    } else {
+                        infoDiv.style.display = 'none';
+                    }
+                });
+            })
+            .catch(err => console.error("Erro na telemetria:", err));
+    }
+    setInterval(atualizarStatusInstantaneo, 2000);
 
-                        card.className = `card ${dados.cor}`;
-                        const dot = card.querySelector('.status-dot');
-                        if(dot) dot.className = `status-dot ${dados.status === 'printing' ? 'printing' : ''}`;
-                        
-                        const statusTxt = card.querySelector('.status-text');
-                        if(statusTxt) statusTxt.innerText = dados.msg;
+    function abrirModal(ip, nome) {
+        impressoraSelecionada = ip;
+        document.getElementById('modalImprimir').style.display = "flex";
+        document.getElementById('tituloModal').innerText = `Comandar: ${nome}`;
+        document.querySelector('.close-btn').style.visibility = 'visible';
+        document.querySelector('.file-explorer-container').style.display = 'block';
+        document.getElementById('containerProgresso').style.display = 'none';
+        document.getElementById('btnEnviar').style.display = 'block';
+        document.getElementById('successAnim').classList.remove('show-success');
+        document.getElementById('fullScreenSuccess').classList.remove('show'); // Reset tela cheia
+        pastaAtual = '';
+        carregarPasta(''); 
+        resetBotaoEnviar();
+    }
 
-                        const infoDiv = card.querySelector('.info-impressao');
-                        if (['printing', 'paused'].includes(dados.status)) {
-                            infoDiv.style.display = 'block';
-                            card.querySelector('.nome-arquivo').innerText = dados.arquivo;
-                            card.querySelector('.barra-progresso').style.width = `${dados.progresso}%`;
-                        } else {
-                            infoDiv.style.display = 'none';
+    function carregarPasta(caminho) {
+        const ul = document.getElementById('listaGcodes');
+        ul.innerHTML = '<li class="loading-msg">Consultando...</li>';
+        fetch('/navegar', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ pasta: caminho })
+        }).then(r => r.json()).then(dados => {
+            pastaAtual = dados.atual;
+            renderizarArquivos(dados);
+        });
+    }
+
+    function renderizarArquivos(dados) {
+        const ul = document.getElementById('listaGcodes');
+        ul.innerHTML = ''; 
+        document.getElementById('caminhoAtual').innerText = dados.atual || 'Raiz (gcodes)';
+        document.getElementById('btnVoltar').disabled = (dados.atual === '');
+        dados.pastas.forEach(p => {
+            const li = document.createElement('li');
+            li.className = 'item-pasta';
+            li.innerHTML = `<span>📁</span> <strong>${p}</strong>`;
+            li.onclick = () => carregarPasta(pastaAtual + (pastaAtual ? '\\' : '') + p);
+            ul.appendChild(li);
+        });
+        dados.arquivos.forEach(arq => {
+            const li = document.createElement('li');
+            li.className = 'item-arquivo';
+            li.innerHTML = `<span>📄</span> ${arq}`;
+            li.onclick = () => selecionarArquivo(li, arq);
+            ul.appendChild(li);
+        });
+    }
+
+    function selecionarArquivo(elemento, nomeArquivo) {
+        document.querySelectorAll('#listaGcodes li').forEach(i => i.classList.remove('selecionado'));
+        elemento.classList.add('selecionado');
+        const btn = document.getElementById('btnEnviar');
+        btn.disabled = false;
+        btn.classList.add('active');
+        btn.dataset.arquivo = pastaAtual + (pastaAtual ? '\\' : '') + nomeArquivo; 
+        btn.innerText = `IMPRIMIR AGORA`;
+    }
+
+    function voltarPasta() {
+        const partes = pastaAtual.split('\\');
+        partes.pop();
+        carregarPasta(partes.join('\\'));
+    }
+
+    function resetBotaoEnviar() {
+        const btn = document.getElementById('btnEnviar');
+        btn.disabled = true;
+        btn.classList.remove('active');
+        btn.innerText = "SELECIONE UM ARQUIVO";
+    }
+
+    document.getElementById('btnEnviar').onclick = function() {
+        const arquivo = this.dataset.arquivo;
+        const ip = impressoraSelecionada;
+        const nomeImpressora = document.getElementById('tituloModal').innerText.replace('Comandar: ', '');
+
+        if(!confirm(`Iniciar impressão de: ${arquivo}?`)) return;
+
+        document.querySelector('.file-explorer-container').style.display = 'none';
+        document.getElementById('containerProgresso').style.display = 'block';
+        document.querySelector('.close-btn').style.visibility = 'hidden';
+        this.disabled = true;
+        this.innerText = "AGUARDE...";
+
+        fetch('/imprimir', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ ip: ip, arquivo: arquivo })
+        })
+        .then(r => r.json())
+        .then(res => {
+            if(res.success) {
+                pollingUpload = setInterval(() => {
+                    fetch(`/progresso_transmissao/${ip}`)
+                    .then(r => r.json())
+                    .then(d => {
+                        let p = d.p; 
+                        let msg = d.msg; 
+
+                        if (p === -1) {
+                            alert("Erro: " + msg);
+                            clearInterval(pollingUpload);
+                            pollingUpload = null;
+                            fecharModal();
+                            return;
+                        }
+
+                        document.getElementById('barraProgressoUpload').style.width = p + '%';
+                        document.getElementById('porcentagemUploadTxt').innerText = p + '%';
+                        document.getElementById('statusUploadTxt').innerText = msg;
+
+                        if(p >= 100) {
+                            clearInterval(pollingUpload);
+                            pollingUpload = null;
+
+                            // 🚀 GATILHO: TELA CHEIA LARANJA (ESTILO MERCADO PAGO)
+                            document.getElementById('subtituloSucesso').innerText = `Iniciando impressão na ${nomeImpressora}...`;
+                            document.getElementById('fullScreenSuccess').classList.add('show');
+
+                            setTimeout(() => {
+                                document.getElementById('fullScreenSuccess').classList.remove('show');
+                                fecharModal();
+                                atualizarStatusInstantaneo();
+                            }, 4000); 
                         }
                     });
-                })
-                .catch(err => console.error("Erro na telemetria:", err));
+                }, 800);
+            } else {
+                alert("Erro: " + res.message);
+                fecharModal();
+            }
+        });
+    };
+
+    function fecharModal() {
+        if (pollingUpload) return; 
+        document.getElementById('modalImprimir').style.display = "none";
+    }
+
+    window.onclick = e => { 
+        if (e.target.id === 'modalImprimir') {
+            if (!pollingUpload) fecharModal(); 
+            else {
+                const win = document.querySelector('.modal-window');
+                win.style.border = '2px solid #ff9800';
+                setTimeout(() => win.style.border = '1px solid #444', 300);
+            }
         }
-        setInterval(atualizarStatusInstantaneo, 2000);
-
-        function abrirModal(ip, nome) {
-            impressoraSelecionada = ip;
-            document.getElementById('modalImprimir').style.display = "flex";
-            document.getElementById('tituloModal').innerText = `Comandar: ${nome}`;
-            document.querySelector('.file-explorer-container').style.display = 'block';
-            document.getElementById('containerProgresso').style.display = 'none';
-            document.getElementById('btnEnviar').style.display = 'block';
-            pastaAtual = '';
-            carregarPasta(''); 
-            resetBotaoEnviar();
-        }
-
-        function carregarPasta(caminho) {
-            const ul = document.getElementById('listaGcodes');
-            ul.innerHTML = '<li class="loading-msg">Consultando...</li>';
-            fetch('/navegar', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ pasta: caminho })
-            }).then(r => r.json()).then(dados => {
-                pastaAtual = dados.atual;
-                renderizarArquivos(dados);
-            });
-        }
-
-        function renderizarArquivos(dados) {
-            const ul = document.getElementById('listaGcodes');
-            ul.innerHTML = ''; 
-            document.getElementById('caminhoAtual').innerText = dados.atual || 'Raiz (gcodes)';
-            document.getElementById('btnVoltar').disabled = (dados.atual === '');
-            dados.pastas.forEach(p => {
-                const li = document.createElement('li');
-                li.className = 'item-pasta';
-                li.innerHTML = `<span>📁</span> <strong>${p}</strong>`;
-                li.onclick = () => carregarPasta(pastaAtual + (pastaAtual ? '\\' : '') + p);
-                ul.appendChild(li);
-            });
-            dados.arquivos.forEach(arq => {
-                const li = document.createElement('li');
-                li.className = 'item-arquivo';
-                li.innerHTML = `<span>📄</span> ${arq}`;
-                li.onclick = () => selecionarArquivo(li, arq);
-                ul.appendChild(li);
-            });
-        }
-
-        function selecionarArquivo(elemento, nomeArquivo) {
-            document.querySelectorAll('#listaGcodes li').forEach(i => i.classList.remove('selecionado'));
-            elemento.classList.add('selecionado');
-            const btn = document.getElementById('btnEnviar');
-            btn.disabled = false;
-            btn.classList.add('active');
-            btn.dataset.arquivo = pastaAtual + (pastaAtual ? '\\' : '') + nomeArquivo; 
-            btn.innerText = `IMPRIMIR AGORA`;
-        }
-
-        function voltarPasta() {
-            const partes = pastaAtual.split('\\');
-            partes.pop();
-            carregarPasta(partes.join('\\'));
-        }
-
-        function resetBotaoEnviar() {
-            const btn = document.getElementById('btnEnviar');
-            btn.disabled = true;
-            btn.classList.remove('active');
-            btn.innerText = "SELECIONE UM ARQUIVO";
-        }
-
-        document.getElementById('btnEnviar').onclick = function() {
-            const arquivo = this.dataset.arquivo;
-            const ip = impressoraSelecionada;
-            if(!confirm(`Iniciar impressão de: ${arquivo}?`)) return;
-
-            document.querySelector('.file-explorer-container').style.display = 'none';
-            document.getElementById('containerProgresso').style.display = 'block';
-            this.disabled = true;
-            this.innerText = "AGUARDE...";
-            this.classList.add('loading');
-
-            fetch('/imprimir', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ ip: ip, arquivo: arquivo })
-            })
-            .then(r => r.json())
-            .then(res => {
-                if(res.success) {
-                    pollingUpload = setInterval(() => {
-                        fetch(`/progresso_transmissao/${ip}`)
-                        .then(r => r.json())
-                        .then(d => {
-                            let p = d.p; 
-                            let msg = d.msg; 
-
-                            if (p === -1) {
-                                alert("Erro: " + msg);
-                                clearInterval(pollingUpload);
-                                fecharModal();
-                                return;
-                            }
-
-                            document.getElementById('barraProgressoUpload').style.width = p + '%';
-                            document.getElementById('porcentagemUploadTxt').innerText = p + '%';
-                            document.getElementById('statusUploadTxt').innerText = msg;
-
-                            if(p >= 100) {
-                                clearInterval(pollingUpload);
-                                setTimeout(() => {
-                                    fecharModal();
-                                    atualizarStatusInstantaneo();
-                                }, 1500);
-                            }
-                        });
-                    }, 800);
-                } else {
-                    alert("Erro: " + res.message);
-                    fecharModal();
-                }
-            });
-        };
-
-        function fecharModal() {
-            if (pollingUpload) clearInterval(pollingUpload);
-            document.getElementById('modalImprimir').style.display = "none";
-        }
-        
-        window.onclick = e => { if (e.target.id === 'modalImprimir') fecharModal(); };
-    </script>
+    };
+</script>
 </body>
 </html>

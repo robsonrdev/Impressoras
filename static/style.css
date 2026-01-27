@@ -27,6 +27,10 @@
 
     --status-offline-bg: rgba(102, 102, 102, 0.15);
     --status-offline-fg: #888888;
+
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
 }
 
 /* Reset Básico */
@@ -531,4 +535,104 @@ body {
 .card.printing .progress-bar-fill {
     background: linear-gradient(90deg, #f39c12, #ff9800);
     box-shadow: 0 0 8px rgba(255, 152, 0, 0.5);
+}
+
+/* --- Overlay de Tela Cheia --- */
+.fullscreen-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(135deg, #ff9800, #f57c00); /* Laranja degradê vibrante */
+    z-index: 9999; /* Fica por cima de tudo, inclusive do modal */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.5s ease, visibility 0.5s;
+}
+
+/* Classe para ativar a tela cheia */
+.fullscreen-overlay.show {
+    opacity: 1;
+    visibility: visible;
+}
+
+/* Conteúdo Centralizado */
+.success-content {
+    text-align: center;
+    color: #fff; /* Texto branco para contraste */
+    transform: translateY(20px);
+    opacity: 0;
+    transition: all 0.8s cubic-bezier(0.22, 1, 0.36, 1); /* Efeito "pop" suave */
+}
+
+.fullscreen-overlay.show .success-content {
+    transform: translateY(0);
+    opacity: 1;
+    transition-delay: 0.2s; /* Entra um pouco depois do fundo */
+}
+
+/* --- Ícone de Check Sofisticado (SVG) --- */
+.sophisticated-check svg {
+    width: 150px; /* Ícone grande */
+    height: 150px;
+    display: block;
+    margin: 0 auto 30px;
+}
+
+/* Círculo de Fundo Branco */
+.bg-circle {
+    fill: #fff;
+    stroke: #fff;
+    stroke-width: 2;
+    transform-origin: center;
+    transform: scale(0); /* Começa invisível */
+}
+
+/* O Check Laranja Grosso */
+.check-path {
+    fill: none;
+    stroke: #ff9800; /* Check laranja */
+    stroke-width: 8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-dasharray: 100;
+    stroke-dashoffset: 100; /* Começa "apagado" */
+}
+
+/* Animação ao ativar */
+.fullscreen-overlay.show .bg-circle {
+    animation: circle-pop 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+    animation-delay: 0.3s;
+}
+
+.fullscreen-overlay.show .check-path {
+    animation: check-draw-stroke 0.8s ease-out forwards;
+    animation-delay: 0.7s; /* Desenha depois que o círculo aparece */
+}
+
+/* Textos */
+.success-title {
+    font-size: 2.5rem;
+    font-weight: 800;
+    margin-bottom: 10px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+}
+
+.success-subtitle {
+    font-size: 1.2rem;
+    opacity: 0.9;
+}
+
+/* --- Keyframes das Animações --- */
+@keyframes circle-pop {
+    to { transform: scale(1); }
+}
+
+@keyframes check-draw-stroke {
+    to { stroke-dashoffset: 0; }
 }
