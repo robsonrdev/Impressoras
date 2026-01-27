@@ -12,7 +12,7 @@ app = Flask(__name__)
 # --- CONFIGURAÇÕES ---
 PASTA_RAIZ = os.path.abspath(r'/app/gcodes') 
 IP_BASE = "192.168.1."
-RANGE_IPS = (1, 255) # Otimizado para sua rede (ignora IPs abaixo de 40)
+RANGE_IPS = (1, 255) 
 
 # Dicionários Globais - Memória Permanente da Farm
 IMPRESSORAS_ENCONTRADAS = {}
@@ -23,7 +23,7 @@ SESSAO_REDE = requests.Session()
 SESSAO_REDE.headers.update({'Connection': 'keep-alive'})
 FALHAS_CONSECUTIVAS = {}
 
-# --- CLASSE MONITOR (TRANSMISSÃO COM BUFFER DE VALIDAÇÃO) ---
+# --- CLASSE MONITOR (TRANSMISSÃO) ---
 class Monitor:
     def __init__(self, file, ip_alvo):
         self.file = file
@@ -35,7 +35,6 @@ class Monitor:
         data = self.file.read(size)
         self.bytes_read += len(data)
         if self.total > 0:
-            # Trava em 90% para deixar margem para a verificação de metadados
             percent = int((self.bytes_read / self.total) * 90)
             if self.ip_alvo in PROGRESSO_UPLOAD:
                 PROGRESSO_UPLOAD[self.ip_alvo]["p"] = percent
@@ -56,7 +55,7 @@ def testar_conexao_rapida(ip, porta=80):
     except: return False
 
 def verificar_ip(i):
-    """Mapeia e atualiza status com tolerância a falhas (Memória Fixa)"""
+    """Mapeia TODOS os status e atualiza em tempo real"""
     ip = f"{IP_BASE}{i}"
     
     if not testar_conexao_rapida(ip):
@@ -74,21 +73,37 @@ def verificar_ip(i):
         if resp.status_code == 200:
             FALHAS_CONSECUTIVAS[ip] = 0
             dados = resp.json()
-            status = dados['result']['status']['print_stats']['state']
+            status_klipper = dados['result']['status']['print_stats']['state']
             filename = dados['result']['status']['print_stats']['filename']
             progresso = int(dados['result']['status']['display_status']['progress'] * 100)
             
-            cor_status = "printing" if status == "printing" else "ready"
-            if status == "paused": cor_status = "paused"
-            
-            msg_exibicao = "STANDBAY"
-            if status == "printing":
+            # --- MAPEAMENTO COMPLETO DE STATUS AO VIVO ---
+            if status_klipper == "printing":
                 msg_exibicao = f"IMPRIMINDO {progresso}%"
+                cor_status = "printing"
+            elif status_klipper in ["startup", "busy"]:
+                msg_exibicao = "PREPARANDO / AQUECENDO"
+                cor_status = "printing"
+            elif status_klipper == "paused":
+                msg_exibicao = "PAUSADO"
+                cor_status = "paused"
+            elif status_klipper == "complete":
+                msg_exibicao = "CONCLUÍDO"
+                cor_status = "ready"
+            elif status_klipper == "error":
+                msg_exibicao = "ERRO NA MÁQUINA"
+                cor_status = "offline"
+            elif status_klipper == "standby" or status_klipper == "ready" or status_klipper == "idle":
+                msg_exibicao = "PRONTA"
+                cor_status = "ready"
+            else:
+                msg_exibicao = status_klipper.upper()
+                cor_status = "ready"
             
             IMPRESSORAS_ENCONTRADAS[ip] = {
                 'nome': f"MÁQUINA {i}",
                 'modelo_real': "Neptune 4 MAX",
-                'status': status,
+                'status': status_klipper,
                 'cor': cor_status,
                 'msg': msg_exibicao,
                 'ip': ip,
@@ -103,10 +118,8 @@ def verificar_ip(i):
                 IMPRESSORAS_ENCONTRADAS[ip].update({'status': 'offline', 'cor': 'offline', 'msg': 'OFFLINE'})
 
 def scanner_inteligente():
-    """Varre a rede uma vez e monitora os IPs encontrados (Memória)"""
     with ThreadPoolExecutor(max_workers=50) as executor:
         executor.map(verificar_ip, range(RANGE_IPS[0], RANGE_IPS[1]))
-    
     while True:
         time.sleep(3)
         if IMPRESSORAS_ENCONTRADAS:
@@ -116,57 +129,55 @@ def scanner_inteligente():
 
 threading.Thread(target=scanner_inteligente, daemon=True).start()
 
-# --- LÓGICA DE UPLOAD COM AUTO-RETRY E INTEGRIDADE ---
+# --- LÓGICA DE UPLOAD E SUCESSO IMEDIATO ---
 def tarefa_upload(ip_alvo, caminho_completo):
     tentativas_max = 2
     for tentativa in range(tentativas_max):
         try:
             nome_arquivo = os.path.basename(caminho_completo)
             tamanho_local = os.path.getsize(caminho_completo)
-            
-            # Feedback Visual: Etapa de Validação
             PROGRESSO_UPLOAD[ip_alvo] = {"p": 5, "msg": f"Tentativa {tentativa+1}: Validando..."}
             
-            # 1. Verificação de prontidão
+            # 1. Prontidão
             check = SESSAO_REDE.get(f"http://{ip_alvo}/printer/info", timeout=5).json()
             if check.get('result', {}).get('state') not in ['ready', 'idle']:
                 PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": "ERRO: Máquina Ocupada"}
                 return
 
-            # 2. Upload com Monitor de progresso
+            # 2. Upload
             with open(caminho_completo, 'rb') as f:
                 monitor = Monitor(f, ip_alvo)
                 files = {'file': (nome_arquivo, monitor)}
                 SESSAO_REDE.post(f"http://{ip_alvo}/server/files/upload", files=files, timeout=900)
             
-            # 3. Verificação de Integridade (Metadata)
-            PROGRESSO_UPLOAD[ip_alvo] = {"p": 95, "msg": "Verificando integridade..."}
-            time.sleep(2)
+            # 3. Integridade
             meta_url = f"http://{ip_alvo}/server/files/metadata?filename={urllib.parse.quote(nome_arquivo)}"
             meta_resp = SESSAO_REDE.get(meta_url, timeout=5).json()
             tamanho_remoto = meta_resp.get('result', {}).get('size', 0)
 
             if tamanho_local == tamanho_remoto:
-                # 4. Início seguro
                 PROGRESSO_UPLOAD[ip_alvo] = {"p": 98, "msg": "Integridade OK! Iniciando..."}
-                nome_url = urllib.parse.quote(nome_arquivo)
-                res_print = SESSAO_REDE.post(f"http://{ip_alvo}/printer/print/start?filename={nome_url}", timeout=10)
+                res_print = SESSAO_REDE.post(f"http://{ip_alvo}/printer/print/start?filename={urllib.parse.quote(nome_arquivo)}", timeout=10)
                 
                 if res_print.status_code == 200:
+                    # 🚀 GATILHO DE SUCESSO IMEDIATO PARA O JS
                     PROGRESSO_UPLOAD[ip_alvo] = {"p": 100, "msg": "Sucesso! Bom trabalho."}
+                    
+                    # ⚡ Sincronização Instantânea: Força a atualização do status na memória
+                    # para que o dashboard identifique o estado 'busy' dos logs na hora.
+                    time.sleep(1)
+                    verificar_ip(int(ip_alvo.split('.')[-1]))
                     return 
                 else:
                     PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": "ERRO: Falha no Start"}
                     return
             else:
-                # Falha na integridade: Tenta retransmitir se houver tentativas sobrando
                 if tentativa < tentativas_max - 1:
-                    PROGRESSO_UPLOAD[ip_alvo]["msg"] = "Erro de integridade. Reiniciando..."
                     time.sleep(1)
                 else:
                     PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": "ERRO: Arquivo Corrompido"}
 
-        except Exception as e:
+        except Exception:
             if tentativa == tentativas_max - 1:
                 PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": "FALHA: Erro de Rede"}
 
@@ -189,7 +200,6 @@ def imprimir():
     caminho = os.path.abspath(os.path.join(PASTA_RAIZ, arquivo))
     if not os.path.exists(caminho):
         return jsonify({"success": False, "message": "Arquivo não encontrado"})
-    
     PROGRESSO_UPLOAD[ip] = {"p": 0, "msg": "Preparando..."}
     threading.Thread(target=tarefa_upload, args=(ip, caminho)).start()
     return jsonify({"success": True})
