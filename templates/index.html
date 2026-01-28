@@ -43,6 +43,27 @@
         <div class="grid-responsive">
             {% for ip, dados in impressoras.items() %}
             <section class="card {{ dados.cor }}" onclick="abrirModal('{{ ip }}', '{{ dados.nome }}')">
+
+            <div class="card-loader-overlay" id="loader-{{ ip | replace('.', '-') }}" style="display: none;">
+    <div class="mini-loader-content" id="content-{{ ip | replace('.', '-') }}">
+        <div class="mini-upload-track">
+            <div class="mini-upload-fill" id="fill-{{ ip | replace('.', '-') }}"></div>
+        </div>
+        <div class="mini-status-row">
+            <span id="pct-{{ ip | replace('.', '-') }}">0%</span>
+            <p id="msg-{{ ip | replace('.', '-') }}">Enviando...</p>
+        </div>
+    </div>
+
+    <div class="mini-success-view" id="success-{{ ip | replace('.', '-') }}" style="display: none;">
+    <div class="sophisticated-check mini">
+        <svg viewBox="0 0 100 100">
+            <circle class="bg-circle" cx="50" cy="50" r="45"/>
+            <path class="check-path" d="M30 50 L45 65 L70 35"/>
+        </svg>
+    </div>
+</div>
+</div>
                 <div class="card-header-row">
                     <span class="badge-id">#{{ loop.index }}</span>
                     <div class="status-badge">
@@ -111,8 +132,8 @@
     // --- ESTADO GLOBAL ÚNICO ---
     let impressoraSelecionada = '';
     let pastaAtual = '';
-    let pollingUpload = null;
-    let isPollingPaused = false; // 🚀 Chave para foco total no upload
+    let uploadsAtivos = {}; // Objeto para gerenciar múltiplos intervalos: { "IP": IntervalID }
+    let isPollingPaused = false;
 
     // --- 1. Sincronização de Status (Dashboard) ---
     function atualizarStatusInstantaneo() {
@@ -221,95 +242,77 @@
     }
 
     // --- 3. Execução de Envio com Foco Total ---
+    // --- 3. Execução de Envio com Foco Total ---
     document.getElementById('btnEnviar').onclick = function() {
         const arquivo = this.dataset.arquivo;
         const ip = impressoraSelecionada;
+        // 🚀 Ajuste: Garantimos que o ID do JS bata com o do HTML
+        const idLimpo = ip.split('.').join('-'); 
         const nomeImpressora = document.getElementById('tituloModal').innerText.replace('Comandar: ', '');
         
-        // 🛑 O confirm vem antes para não pausar o sistema desnecessariamente
         if(!confirm(`Iniciar impressão de: ${arquivo}?`)) return;
 
-        // 🚀 ATIVA O FOCO TOTAL: Pausa atualizações de status para priorizar o upload
-        isPollingPaused = true;
+        // 🚀 Opcional: Pausa a telemetria global se desejar foco total no upload
+        // isPollingPaused = true; 
 
-        document.querySelector('.file-explorer-container').style.display = 'none';
-        document.getElementById('containerProgresso').style.display = 'block';
-        document.querySelector('.close-btn').style.visibility = 'hidden';
-        this.disabled = true;
-        this.innerText = "AGUARDE...";
+        fecharModal();
+
+        const loader = document.getElementById(`loader-${idLimpo}`);
+        const content = document.getElementById(`content-${idLimpo}`);
+        const success = document.getElementById(`success-${idLimpo}`);
+        
+        if(loader) {
+            loader.style.display = 'flex';
+            content.style.display = 'block';
+            success.style.display = 'none';
+        }
 
         fetch('/imprimir', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ ip: ip, arquivo: arquivo })
-        })
-        .then(r => r.json())
-        .then(res => {
-            if(res.success) {
-                pollingUpload = setInterval(() => {
-                    fetch(`/progresso_transmissao/${ip}`)
-                    .then(r => r.json())
-                    .then(d => {
-                        let p = d.p; 
-                        let msg = d.msg; 
-                        
-                        // Tratamento de erro retornado pela impressora
-                        if (p === -1) {
-                            alert("Erro: " + msg);
-                            clearInterval(pollingUpload);
-                            pollingUpload = null;
-                            isPollingPaused = false; // 🔓 Retoma monitoramento
-                            fecharModal();
-                            return;
-                        }
-
-                        document.getElementById('barraProgressoUpload').style.width = p + '%';
-                        document.getElementById('porcentagemUploadTxt').innerText = p + '%';
-                        document.getElementById('statusUploadTxt').innerText = msg;
-
-                        // Gatilho de Sucesso (Transmissão Concluída)
-                        if(p >= 100) {
-                            clearInterval(pollingUpload);
-                            pollingUpload = null; 
-
-                            const overlay = document.getElementById('fullScreenSuccess');
-                            const subtitulo = document.getElementById('subtituloSucesso');
-                            subtitulo.innerText = `Preparando ${nomeImpressora}!`;
-                            subtitulo.style.color = "#fff";
-
-                            overlay.classList.add('show');
-                            fecharModal(); 
-
-                            setTimeout(() => {
-                                overlay.classList.remove('show');
-                                // 🔓 SUCESSO: Retoma o monitoramento global
-                                isPollingPaused = false; 
-                                atualizarStatusInstantaneo(); 
-                            }, 3500);
-                        }
-                    })
-                    .catch(err => {
-                        // 🔓 ERRO DE REDE: Destrava para não "congelar" o painel
-                        console.error("Erro no polling de upload:", err);
-                        clearInterval(pollingUpload);
-                        pollingUpload = null;
-                        isPollingPaused = false; 
-                        fecharModal();
-                    });
-                }, 800);
-            } else { 
-                alert("Erro: " + res.message); 
-                isPollingPaused = false; // 🔓 Retoma status se o envio falhar
-                fecharModal(); 
-            }
-        }).catch(err => {
-            isPollingPaused = false; // 🔓 Retoma status em erro de rede inicial
-            console.error(err);
         });
+
+        uploadsAtivos[ip] = setInterval(() => {
+            fetch(`/progresso_transmissao/${ip}`)
+            .then(r => r.json())
+            .then(d => {
+                let p = d.p; 
+                
+                // Atualiza elementos internos do card
+                const fill = document.getElementById(`fill-${idLimpo}`);
+                const pct = document.getElementById(`pct-${idLimpo}`);
+                const msg = document.getElementById(`msg-${idLimpo}`);
+
+                if(fill) fill.style.width = p + '%';
+                if(pct) pct.innerText = p + '%';
+                if(msg) msg.innerText = d.msg;
+
+                if(p >= 100) {
+                    clearInterval(uploadsAtivos[ip]);
+                    delete uploadsAtivos[ip];
+
+                    if(content) content.style.display = 'none';
+                    if(success) success.style.display = 'flex';
+
+                    setTimeout(() => {
+                        if(loader) loader.style.display = 'none';
+                        // isPollingPaused = false; // Retoma se tiver pausado
+                        atualizarStatusInstantaneo(); 
+                    }, 4000);
+                }
+            })
+            .catch(err => {
+                console.error(`Erro no upload para ${ip}:`, err);
+                clearInterval(uploadsAtivos[ip]);
+                if(loader) loader.style.display = 'none';
+                // isPollingPaused = false;
+            });
+        }, 600);
     };
 
     function fecharModal() {
-        if (pollingUpload) return; 
+        // Removemos a trava do pollingUpload para permitir multitarefa
         document.getElementById('modalImprimir').style.display = "none";
     }
 
