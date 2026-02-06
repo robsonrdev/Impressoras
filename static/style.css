@@ -446,9 +446,15 @@ body {
    6. Modais Premium
    ========================================================================== */
 .modal-overlay.glass {
-    display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-    background: rgba(0,0,0,0.7); backdrop-filter: blur(15px); z-index: 2000;
-    align-items: center; justify-content: center;
+    display: none; 
+    position: fixed; 
+    top: 0; left: 0; 
+    width: 100%; height: 100%;
+    background: rgba(0,0,0,0.8); 
+    backdrop-filter: blur(15px); 
+    z-index: 5000; /* 🚀 AGORA É A CAMADA MAIS ALTA */
+    align-items: center; 
+    justify-content: center;
 }
 
 .modal-header-cc {
@@ -486,6 +492,7 @@ body {
     height: 100%; /* Ocupa o modal inteiro */
 }
 .command-center-modal {
+    margin-top: 0;
     width: 95vw; 
     height: 92vh; 
     max-height: 95vh; /* 🛡️ Trava o modal dentro da tela */
@@ -876,4 +883,24 @@ body {
     .cc-file-section {
         min-height: 400px; /* Garante tamanho para ver os arquivos */
     }
+}
+
+@media (max-width: 1024px) {
+    .app-layout { flex-direction: column; }
+
+    .sidebar {
+        width: 100%; height: auto;
+        flex-direction: row; justify-content: space-between;
+        padding: 10px 20px;
+        position: sticky; top: 0;
+        z-index: 1000; /* Baixamos para o modal cobrir */
+    }
+
+    .brand-text, .nav-item span:not(.icon) { display: none; }
+    .sidebar-nav { display: none; } /* Esconde o menu lateral no tablet */
+    .status-toggler { display: flex; } /* Ativa o botão de Status Farm */
+
+    .main-viewport { padding: 20px; }
+    .summary-widgets { grid-template-columns: 1fr; }
+    .grid-responsive { grid-template-columns: 1fr; }
 }
