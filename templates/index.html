@@ -6,6 +6,7 @@
     <title>Dashboard 3D - SuperTech Farm Control PRO</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='estoque.css') }}">
 
     <style>
         /* Estilo de emergência para garantir o fundo das modais */
@@ -42,12 +43,17 @@
             </div>
 
             <nav class="sidebar-nav">
-                <a href="#" class="nav-item active"><span class="icon">📊</span> Dashboard</a>
-                <a href="#" class="nav-item"><span class="icon">📂</span> Biblioteca G-Code</a>
-                <a href="#" class="nav-item"><span class="icon">📈</span> Estatísticas</a>
-                <a href="#" class="nav-item"><span class="icon">⚙️</span> Configurações</a>
-            </nav>
-
+    <a href="javascript:void(0)" onclick="trocarTela('dashboard')" id="link-dashboard" class="nav-item active">
+        <span class="icon">📊</span> Dashboard
+    </a>
+    
+    <a href="javascript:void(0)" onclick="trocarTela('estoque')" id="link-estoque" class="nav-item">
+        <span class="icon">📦</span> <span>Estoque & Bling</span>
+    </a>
+    
+    <a href="#" class="nav-item"><span class="icon">📈</span> Estatísticas</a>
+    <a href="#" class="nav-item"><span class="icon">⚙️</span> Configurações</a>
+</nav>
             <button class="status-toggler" onclick="toggleStatusDrawer()">
                 <span class="icon">📊</span> <span class="label">Status Farm</span>
             </button>
@@ -59,91 +65,101 @@
             </div>
         </aside>
 
-        <main class="main-viewport">
-            <header class="top-bar">
-                <div class="welcome-text">
-                    <h1>Olá, Robson!</h1>
-                    <p>Monitoramento de Farm - <strong>Betim</strong></p>
+       <main class="main-viewport">
+    <header class="top-bar">
+        <div class="welcome-text">
+            <h1 id="titulo-pagina">Olá, Robson!</h1>
+            <p id="subtitulo-pagina">Monitoramento de Farm - <strong>Betim</strong></p>
+        </div>
+        <div id="statusOverlay" class="status-drawer-overlay" onclick="toggleStatusDrawer()"></div>
+    </header>
+
+    <section id="secao-dashboard">
+        <section class="summary-widgets">
+            <div class="widget-card main-stats">
+                <h3>Status Geral</h3>
+                <div class="stats-row">
+                    <div class="stat-box">
+                        <span class="val" id="countDisp">{{ disponiveis }}</span>
+                        <span class="lbl">Prontas</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="val highlight">{{ impressoras|length }}</span>
+                        <span class="lbl">Total Máquinas</span>
+                    </div>
                 </div>
-                <div class="top-bar-actions">
+            </div>
+
+            <div class="widget-card glass production-widget">
+                <div class="production-header"><span class="widget-icon">⚡</span><h4>Linha de Produção</h4></div>
+                <div class="production-scroll-area">
+                    <ul id="listaProducaoAtiva" class="production-list">
+                        <li class="empty-msg">Aguardando início...</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="widget-card glass production-widget">
+                <div class="production-header"><span class="widget-icon">✅</span><h4>Concluídos (24h)</h4></div>
+                <div class="production-scroll-area">
+                    <ul id="listaProducaoConcluida" class="production-list">
+                        <li class="empty-msg">Nenhuma peça hoje</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <div class="grid-responsive">
+            {% for ip, dados in impressoras.items() %}
+            <section class="card-pro {{ dados.cor }}" onclick="abrirModal('{{ ip }}', '{{ dados.nome }}')">
+                <button class="btn-emergency-stop" onclick="event.stopPropagation(); paradaDeEmergencia('{{ ip }}', '{{ dados.nome }}')">
+                    ⚠️
+                </button>
                 
-                </div>
-                <div id="statusOverlay" class="status-drawer-overlay" onclick="toggleStatusDrawer()"></div>
-            </header>
-
-            <section class="summary-widgets">
-                <div class="widget-card main-stats">
-                    <h3>Status Geral</h3>
-                    <div class="stats-row">
-                        <div class="stat-box">
-                            <span class="val" id="countDisp">{{ disponiveis }}</span>
-                            <span class="lbl">Prontas</span>
-                        </div>
-                        <div class="stat-box">
-                            <span class="val highlight">{{ impressoras|length }}</span>
-                            <span class="lbl">Total Máquinas</span>
-                        </div>
+                <div class="card-loader-overlay" id="loader-{{ ip | replace('.', '-') }}" style="display: none;">
+                    <div class="mini-loader-content" id="content-{{ ip | replace('.', '-') }}">
+                        <div class="mini-upload-track"><div class="mini-upload-fill" id="fill-{{ ip | replace('.', '-') }}"></div></div>
+                        <div class="mini-status-row"><span id="pct-{{ ip | replace('.', '-') }}">0%</span><p id="msg-{{ ip | replace('.', '-') }}">Enviando...</p></div>
+                    </div>
+                    <div class="mini-success-view" id="success-{{ ip | replace('.', '-') }}" style="display: none;">
+                        <div class="sophisticated-check mini"><svg viewBox="0 0 100 100"><circle class="bg-circle" cx="50" cy="50" r="45"/><path class="check-path" d="M30 50 L45 65 L70 35"/></svg></div>
                     </div>
                 </div>
 
-                <div class="widget-card glass production-widget">
-                    <div class="production-header"><span class="widget-icon">⚡</span><h4>Linha de Produção</h4></div>
-                    <div class="production-scroll-area">
-                        <ul id="listaProducaoAtiva" class="production-list">
-                            <li class="empty-msg">Aguardando início...</li>
-                        </ul>
+                <div class="card-top">
+                    <div class="status-pill">
+                        <span class="status-dot {{ 'printing' if dados.status == 'printing' else '' }}"></span>
+                        <span class="status-text">{{ dados.msg }}</span>
                     </div>
                 </div>
 
-                <div class="widget-card glass production-widget">
-                    <div class="production-header"><span class="widget-icon">✅</span><h4>Concluídos (24h)</h4></div>
-                    <div class="production-scroll-area">
-                        <ul id="listaProducaoConcluida" class="production-list">
-                            <li class="empty-msg">Nenhuma peça hoje</li>
-                        </ul>
+                <div class="printer-visual">
+                    <img src="{{ url_for('static', filename='img/' + dados.imagem) }}" alt="Printer">
+                </div>
+
+                <div class="card-footer-info">
+                    <div class="printer-titles"><h2>{{ dados.nome }}</h2><code class="ip-address">{{ ip }}</code></div>
+                    <div class="progress-area" style="display: {{ 'block' if dados.status in ['printing', 'paused'] else 'none' }};">
+                        <div class="progress-meta"><span>Progresso</span><span class="pct-val">{{ dados.progresso }}%</span></div>
+                        <div class="progress-track"><div class="progress-fill barra-progresso" style="width: {{ dados.progresso }}%;"></div></div>
                     </div>
                 </div>
             </section>
+            {% endfor %}
+        </div>
+    </section>
 
-            <div class="grid-responsive">
-                {% for ip, dados in impressoras.items() %}
-                <section class="card-pro {{ dados.cor }}" onclick="abrirModal('{{ ip }}', '{{ dados.nome }}')">
-                    <button class="btn-emergency-stop" onclick="event.stopPropagation(); paradaDeEmergencia('{{ ip }}', '{{ dados.nome }}')">
-    ⚠️
-</button>
-                    
-                    <div class="card-loader-overlay" id="loader-{{ ip | replace('.', '-') }}" style="display: none;">
-                        <div class="mini-loader-content" id="content-{{ ip | replace('.', '-') }}">
-                            <div class="mini-upload-track"><div class="mini-upload-fill" id="fill-{{ ip | replace('.', '-') }}"></div></div>
-                            <div class="mini-status-row"><span id="pct-{{ ip | replace('.', '-') }}">0%</span><p id="msg-{{ ip | replace('.', '-') }}">Enviando...</p></div>
-                        </div>
-                        <div class="mini-success-view" id="success-{{ ip | replace('.', '-') }}" style="display: none;">
-                            <div class="sophisticated-check mini"><svg viewBox="0 0 100 100"><circle class="bg-circle" cx="50" cy="50" r="45"/><path class="check-path" d="M30 50 L45 65 L70 35"/></svg></div>
-                        </div>
-                    </div>
-
-                    <div class="card-top">
-                        <div class="status-pill">
-                            <span class="status-dot {{ 'printing' if dados.status == 'printing' else '' }}"></span>
-                            <span class="status-text">{{ dados.msg }}</span>
-                        </div>
-                    </div>
-
-                    <div class="printer-visual">
-                        <img src="{{ url_for('static', filename='img/' + dados.imagem) }}" alt="Printer">
-                    </div>
-
-                    <div class="card-footer-info">
-                        <div class="printer-titles"><h2>{{ dados.nome }}</h2><code class="ip-address">{{ ip }}</code></div>
-                        <div class="progress-area" style="display: {{ 'block' if dados.status in ['printing', 'paused'] else 'none' }};">
-                            <div class="progress-meta"><span>Progresso</span><span class="pct-val">{{ dados.progresso }}%</span></div>
-                            <div class="progress-track"><div class="progress-fill barra-progresso" style="width: {{ dados.progresso }}%;"></div></div>
-                        </div>
-                    </div>
-                </section>
-                {% endfor %}
+    <section id="secao-estoque" style="display: none;">
+        <div class="inventory-container">
+            <div class="inventory-actions">
+                <button class="btn-sync" onclick="carregarEstoqueBling()">🔄 Sincronizar Bling</button>
             </div>
-        </main>
+            <div id="gridEstoque" class="inventory-grid">
+                </div>
+        </div>
+    </section>
+</main>
+
     </div>
 
     <div id="modalCadastro" class="modal-overlay glass">
@@ -423,6 +439,55 @@ function abrirModalCadastro() {
                 });
             });
         }
+
+        // 🔄 Reconecta aos uploads ativos ao carregar a página
+function recuperarEstadoUploads() {
+    const cards = document.querySelectorAll('.card-pro');
+    
+    cards.forEach(card => {
+        // Extrai o IP do atributo onclick do card
+        const ipMatch = card.getAttribute('onclick').match(/'([^']+)'/);
+        if (ipMatch) {
+            const ip = ipMatch[1];
+            const idLimpo = ip.split('.').join('-');
+            
+            // Pergunta ao servidor o status atual desse IP
+            fetch(`/progresso_transmissao/${ip}`).then(r => r.json()).then(d => {
+                if (d.p > 0 && d.p < 100) {
+                    // Se o progresso for entre 1 e 99, reativa o loader visual
+                    document.getElementById(`loader-${idLimpo}`).style.display = 'flex';
+                    iniciarMonitoramentoUpload(ip, idLimpo);
+                }
+            });
+        }
+    });
+}
+
+// 📦 Isola a lógica de monitoramento para ser reutilizada
+function iniciarMonitoramentoUpload(ip, idLimpo) {
+    if (uploadsAtivos[ip]) clearInterval(uploadsAtivos[ip]);
+    
+    uploadsAtivos[ip] = setInterval(() => {
+        fetch(`/progresso_transmissao/${ip}`).then(r => r.json()).then(d => {
+            document.getElementById(`fill-${idLimpo}`).style.width = d.p + '%';
+            document.getElementById(`pct-${idLimpo}`).innerText = d.p + '%';
+            
+            if (d.p >= 100) {
+                clearInterval(uploadsAtivos[ip]);
+                finalizarVisualUpload(idLimpo);
+            }
+        });
+    }, 800);
+}
+
+function finalizarVisualUpload(idLimpo) {
+    document.getElementById(`content-${idLimpo}`).style.display = 'none';
+    document.getElementById(`success-${idLimpo}`).style.display = 'flex';
+    setTimeout(() => { 
+        document.getElementById(`loader-${idLimpo}`).style.display = 'none';
+        // Opcional: window.location.reload(); se quiser atualizar o status final
+    }, 3000);
+}
         // FUNÇÃO PARA ENVIAR O CADASTRO PARA O BACKEND
 function cadastrarNovaImpressora() {
     const nome = document.getElementById('nomeImpressora').value;
@@ -465,9 +530,9 @@ function cadastrarNovaImpressora() {
             btn.innerText = "INICIAR PRODUÇÃO";
         }
 
-        function carregarArquivosInternos() {
+       function carregarArquivosInternos() {
     const lista = document.getElementById('listaArquivosInternos');
-    // Adiciona um feedback visual de carregamento
+    // Adiciona um feedback visual de carregamento para a farm em Betim
     lista.innerHTML = '<li class="loading-state">Lendo memória da impressora...</li>';
 
     fetch(`/api/arquivos_internos/${impressoraSelecionada}`)
@@ -479,7 +544,7 @@ function cadastrarNovaImpressora() {
             }
 
             lista.innerHTML = arquivos.map(f => {
-                // 🛡️ O SEGREDO: Testamos qual chave existe (path ou name)
+                // 🛡️ Resolve o problema do "undefined": testa as chaves que o Klipper costuma enviar
                 const nomeArquivo = f.path || f.name || "Arquivo s/ nome";
                 const tamanhoMB = (f.size / 1024 / 1024).toFixed(1);
 
@@ -489,7 +554,7 @@ function cadastrarNovaImpressora() {
                             <strong class="file-name-text">${nomeArquivo}</strong>
                             <small class="file-size-tag">${tamanhoMB} MB</small>
                         </div>
-                        <button class="btn-print-internal" onclick="enviarComandoCC('START_PRINT', '${nomeArquivo}')">
+                        <button class="btn-print-internal" onclick="enviarComandoCC('SDCARD_PRINT_FILE', 'FILENAME=${nomeArquivo}')">
                             IMPRIMIR
                         </button>
                     </li>
@@ -597,6 +662,146 @@ function paradaDeEmergencia(ip, nome) {
         });
     }
 }
+
+
+function trocarTela(tela) {
+            const dashboard = document.getElementById('secao-dashboard');
+            const estoque = document.getElementById('secao-estoque');
+            const titulo = document.getElementById('titulo-pagina');
+            const subtitulo = document.getElementById('subtitulo-pagina');
+            
+            // Remove 'active' de todos
+            document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+
+            if (tela === 'dashboard') {
+                dashboard.style.display = 'block';
+                estoque.style.display = 'none';
+                document.getElementById('link-dashboard').classList.add('active');
+                titulo.innerText = "Olá, Robson!";
+                subtitulo.innerHTML = "Monitoramento de Farm - <strong>Betim</strong>";
+            } else if (tela === 'estoque') {
+                dashboard.style.display = 'none';
+                estoque.style.display = 'block';
+                document.getElementById('link-estoque').classList.add('active');
+                titulo.innerText = "Gestão de Estoque";
+                subtitulo.innerHTML = "Sincronização Ativa - <strong>Mercado Livre & Shopee</strong>";
+                
+                // Carrega os dados do Bling apenas quando entra na tela
+                carregarEstoqueBling();
+            }
+        }
+
+
+function carregarEstoqueBling() {
+    const grid = document.getElementById('gridEstoque');
+    grid.innerHTML = '<p class="loading">Sincronizando Farm SuperTech...</p>';
+
+    fetch('/api/estoque_bling')
+        .then(res => res.json())
+        .then(res => {
+            grid.innerHTML = ''; 
+            const produtos = res.data || [];
+
+            produtos.forEach(prod => {
+                // MAPEAMENTO EXATO DO SEU JSON
+                const saldo = (prod.estoque && prod.estoque.saldoVirtualTotal !== undefined) 
+                              ? Math.floor(prod.estoque.saldoVirtualTotal) 
+                              : 0;
+                
+                const nome = prod.nome || "Colmeia Climatizador";
+                const sku = prod.codigo || "S/ SKU";
+                const foto = prod.imagemURL || '/static/img/n4max.png';
+
+                // Cria o Card com o layout da foto que você pediu
+                grid.innerHTML += `
+    <div class="product-card">
+        <img src="${foto}" class="product-image" onerror="this.src='/static/img/n4max.png'">
+        
+        <div class="product-info">
+            <h3>${prod.nome}</h3>
+            <span class="sku-tag">SKU: ${prod.codigo}</span>
+        </div>
+
+        <div class="stock-status">
+            <div class="stock-count">
+                ${Math.floor(prod.estoque.saldoVirtualTotal || 0)}<span>un</span>
+            </div>
+            <button class="btn-adjust" onclick="abrirModalAjuste('${prod.id}', '${prod.nome}')">Ajustar</button>
+        </div>
+    </div>
+`;
+            });
+        });
+}
+// 🛡️ FUNÇÃO QUE FALTAVA: Abre o prompt no tablet para entrada de estoque
+function abrirModalAjuste(id, nome) {
+    const qtd = prompt(`📦 ENTRADA DE ESTOQUE\nProduto: ${nome}\n\nQuantas unidades foram produzidas agora em Betim?`);
+    
+    if (qtd !== null && !isNaN(qtd) && qtd > 0) {
+        ajustarEstoqueManual(id, parseInt(qtd));
+    }
+}
+
+// No seu arquivo index.html ou estoque.js
+function renderizarProdutos(dados) {
+    const grid = document.getElementById('gridEstoque');
+    grid.innerHTML = '';
+
+    dados.data.forEach(prod => {
+        // CORREÇÃO: Pega o saldo virtual (8.00) e remove os decimais
+        let saldo = 0;
+        if (prod.estoque && prod.estoque.saldoVirtual !== undefined) {
+            saldo = Math.floor(prod.estoque.saldoVirtual); 
+        }
+
+        const foto = prod.imagemURL || '/static/img/n4max.png';
+        const sku = prod.codigo || "S/ SKU";
+
+        grid.innerHTML += `
+            <div class="product-card">
+                <img src="${foto}" class="product-image" onerror="this.src='/static/img/n4max.png'">
+                <div class="product-info">
+                    <h3>${prod.nome}</h3>
+                    <span class="sku-tag">SKU: ${sku}</span>
+                </div>
+                <div class="stock-status">
+                    <div class="stock-count">${saldo}<span>un</span></div>
+                    <button class="btn-adjust" onclick="abrirModalAjuste('${prod.id}', '${prod.nome}')">Ajustar</button>
+                </div>
+            </div>
+        `;
+    });
+}
+
+// Função para enviar o novo saldo de estoque para o Bling
+function ajustarEstoqueManual(produtoId, novaQtd) {
+    // Rota corrigida para bater com o seu app.py: /api/adicionar_estoque
+    fetch('/api/adicionar_estoque', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: produtoId, quantidade: novaQtd })
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.error) {
+            alert("❌ Erro ao atualizar: " + data.error);
+        } else {
+            alert(`✅ Sucesso! +${novaQtd} unidades enviadas para Mercado Livre/Shopee.`);
+            carregarEstoqueBling(); // Recarrega para mostrar o novo saldo
+        }
+    })
+    .catch(err => alert("🚨 Erro crítico de rede: " + err));
+}
+
+function voltarPasta() {
+    // Pega o caminho atual, remove a última pasta e recarrega
+    let partes = pastaAtual.split('\\');
+    partes.pop();
+    carregarPasta(partes.join('\\'));
+}
+
+// CHAME ISSO NO FINAL DO SCRIPT:
+window.onload = recuperarEstadoUploads;
     </script>
 </body>
 </html>

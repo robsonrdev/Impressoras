@@ -929,6 +929,8 @@ body {
     box-shadow: 0 0 15px rgba(255, 59, 48, 0.6);
     transform: scale(1.1);
 }
+
+
 /* ==========================================================================
    HOTFIX: Fundo do Modal de Cadastro
    ========================================================================== */
@@ -950,11 +952,14 @@ body {
     justify-content: center;
 }
 
+
+
 /* Quando ativo pelo JS, ele usa Flex para centralizar o formulário */
 .modalCadastro[style*="display: flex"] {
     display: flex !important;
 }
-
+.stock-count {
+    color:red;}
 /* Overlay de fundo */
 .status-drawer-overlay {
     display: none;

@@ -1,18 +1,37 @@
 import os
+import secrets
 import time
 import threading
 import requests
 import socket
+import time
 import urllib.parse
 import json
 from flask import Flask, render_template, request, jsonify
 from concurrent.futures import ThreadPoolExecutor
+from dotenv import load_dotenv
 
 app = Flask(__name__)
 
 # --- CONFIGURAÇÕES ---
 PASTA_RAIZ = os.path.abspath(r'/app/gcodes') 
 ARQUIVO_BANCO = 'impressores.json' 
+
+BLING_API_KEY = "seu_token_aqui"
+
+# Configurações do Cache
+cache_estoque = {
+    "dados": None,
+    "expira_em": 0
+}
+load_dotenv(dotenv_path='.env')
+
+CLIENT_ID = os.getenv("BLING_CLIENT_ID")
+CLIENT_SECRET = os.getenv("BLING_CLIENT_SECRET")
+REDIRECT_URI = os.getenv("REDIRECT_URI")
+
+
+
 
 # Dicionários Globais - Memória de Status
 IMPRESSORAS_ENCONTRADAS = {}
@@ -78,7 +97,172 @@ def testar_conexao_rapida(ip, porta=80):
         return resultado == 0
     except: return False
 
+#bling 
 
+# ==========================================================================
+# SEÇÃO BLING V3 - GESTÃO CENTRALIZADA (BETIM)
+# ==========================================================================
+
+# 1. Funções de Persistência de Tokens
+def carregar_tokens():
+    """Lê os tokens do disco com fallback para dicionário vazio"""
+    if not os.path.exists('tokens.json'):
+        return {}
+    try:
+        with open('tokens.json', 'r') as f:
+            return json.load(f)
+    except:
+        return {}
+
+def salvar_tokens(tokens):
+    """Salva os tokens para que todos os dispositivos usem a mesma sessão"""
+    with open('tokens.json', 'w') as f:
+        json.dump(tokens, f, indent=4)
+
+# 2. Lógica de Renovação Automática (OAuth 2.0)
+def garantir_token_valido():
+    """Garante que qualquer dispositivo sempre tenha um token funcional"""
+    tokens = carregar_tokens()
+    if not tokens:
+        raise Exception("Nenhum token encontrado. Acesse /login_bling primeiro.")
+
+    agora = time.time()
+    # Se o token expira em menos de 5 minutos, renova
+    if agora > (tokens.get('expires_at', 0) - 300):
+        print("🔄 Renovando acesso para múltiplos dispositivos...")
+        url = "https://www.bling.com.br/Api/v3/oauth/token"
+        payload = {
+            "grant_type": "refresh_token",
+            "refresh_token": tokens['refresh_token']
+        }
+        
+        response = requests.post(url, data=payload, auth=(CLIENT_ID, CLIENT_SECRET))
+        
+        if response.status_code == 200:
+            novos_dados = response.json()
+            tokens['access_token'] = novos_dados['access_token']
+            tokens['refresh_token'] = novos_dados.get('refresh_token', tokens['refresh_token'])
+            tokens['expires_at'] = agora + novos_dados['expires_in']
+            salvar_tokens(tokens)
+            print("✅ Token renovado globalmente!")
+        else:
+            print(f"🚨 Erro na renovação: {response.text}")
+    
+    return tokens['access_token']
+
+# 3. Busca de Estoque com Cache de 5 Minutos
+def buscar_estoque_bling(headers):
+    agora = time.time()
+    if cache_estoque["dados"] and agora < cache_estoque["expira_em"]:
+        return cache_estoque["dados"]
+
+    # Rota correta para trazer NOME + FOTO + ESTOQUE (8,00)
+    url = "https://www.bling.com.br/Api/v3/produtos?estoque=S"
+    
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            cache_estoque["dados"] = response.json()
+            cache_estoque["expira_em"] = agora + 300
+            return cache_estoque["dados"]
+        return {"data": []}
+    except Exception as e:
+        print(f"Erro na API: {e}")
+        return {"data": []}
+
+# 4. Rotas de Autenticação e API
+@app.route('/login_bling')
+def login_bling():
+    # 1. Gera um código aleatório para o 'state'
+    state = secrets.token_hex(16) 
+    
+    params = {
+        "response_type": "code",
+        "client_id": CLIENT_ID,
+        "redirect_uri": REDIRECT_URI,
+        "state": state, # AGORA OBRIGATÓRIO
+        "scope": "produtos:read estoques:read estoques:write"
+    }
+    url = "https://www.bling.com.br/Api/v3/oauth/authorize?" + urllib.parse.urlencode(params)
+    return f"<script>window.location.href='{url}';</script>"
+
+@app.route('/callback')
+def callback():
+    # 2. O Bling agora devolve o code E o state
+    code = request.args.get('code')
+    state = request.args.get('state') 
+    
+    print(f"--- DEBUG CALLBACK BETIM ---")
+    print(f"Código recebido: {code}")
+    print(f"Estado recebido: {state}")
+    print(f"-----------------------------")
+
+    if not code:
+        # Se der erro, o Bling manda a descrição na URL
+        erro = request.args.get('error_description', 'Erro desconhecido')
+        return f"<h1>⚠️ Falha na Farm: {erro}</h1>", 400
+
+    url = "https://www.bling.com.br/Api/v3/oauth/token"
+    payload = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": REDIRECT_URI
+    }
+    
+    response = requests.post(url, data=payload, auth=(CLIENT_ID, CLIENT_SECRET))
+    
+    if response.status_code == 200:
+        dados = response.json()
+        tokens = {
+            "access_token": dados['access_token'],
+            "refresh_token": dados['refresh_token'],
+            "expires_at": time.time() + dados['expires_in']
+        }
+        salvar_tokens(tokens)
+        return "<h1>✅ SuperTech 3D: Acesso Total Liberado!</h1>"
+    
+    return f"Erro final: {response.text}"
+
+@app.route('/api/estoque_bling')
+def pegar_estoque():
+    try:
+        # 1. Valida o token OAuth 2.0
+        token = garantir_token_valido()
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        # 2. Faz a chamada real para o Bling V3 com estoque ativado
+        url = "https://www.bling.com.br/Api/v3/produtos?estoque=S"
+        response = requests.get(url, headers=headers)
+        
+        # 3. Retorna os dados diretamente para o Dashboard
+        return jsonify(response.json())
+        
+    except Exception as e:
+        print(f"🚨 Erro na integração Bling em Betim: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/adicionar_estoque', methods=['POST'])
+def adicionar_estoque():
+    dados = request.json
+    try:
+        token = garantir_token_valido()
+        url = "https://www.bling.com.br/Api/v3/estoques"
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        payload = {
+            "produto": {"id": dados.get('id')},
+            "quantidade": dados.get('quantidade'),
+            "operacao": "E" # Entrada manual de produção
+        }
+        
+        response = requests.post(url, json=payload, headers=headers)
+        # Invalida o cache para mostrar o novo número imediatamente
+        cache_estoque["expira_em"] = 0
+        return jsonify(response.json())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+#bling 
 
 # ==========================================================================
 # NOVAS ROTAS PARA O COMMAND CENTER (ABAS DE DETALHES)
