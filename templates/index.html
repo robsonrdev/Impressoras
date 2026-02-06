@@ -6,6 +6,15 @@
     <title>Dashboard 3D - SuperTech Farm Control PRO</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+
+    <style>
+        /* Estilo de emergência para garantir o fundo das modais */
+        .modal-overlay {
+            background-color: rgba(0, 0, 0, 0.85) !important;
+            backdrop-filter: blur(15px) !important;
+            -webkit-backdrop-filter: blur(15px) !important;
+        }
+    </style>
 </head>
 <body class="dashboard-theme">
 
@@ -44,9 +53,9 @@
             </button>
 
             <div class="sidebar-footer">
-                <button onclick="abrirModalCadastro()" class="btn-new-printer">
-                    <span class="plus-icon">+</span> Nova Impressora
-                </button>
+                <button onclick="abrirModalCadastro()" class="btn-new-printer top-btn">
+        + Nova Impressora
+    </button>
             </div>
         </aside>
 
@@ -57,10 +66,7 @@
                     <p>Monitoramento de Farm - <strong>Betim</strong></p>
                 </div>
                 <div class="top-bar-actions">
-                    <div class="search-box">
-                        <span class="search-icon">🔍</span>
-                        <input type="text" placeholder="Buscar impressora...">
-                    </div>
+                
                 </div>
                 <div id="statusOverlay" class="status-drawer-overlay" onclick="toggleStatusDrawer()"></div>
             </header>
@@ -102,7 +108,9 @@
             <div class="grid-responsive">
                 {% for ip, dados in impressoras.items() %}
                 <section class="card-pro {{ dados.cor }}" onclick="abrirModal('{{ ip }}', '{{ dados.nome }}')">
-                    <button class="delete-btn-glass" onclick="event.stopPropagation(); removerImpressora('{{ ip }}', '{{ dados.nome }}')">&times;</button>
+                    <button class="btn-emergency-stop" onclick="event.stopPropagation(); paradaDeEmergencia('{{ ip }}', '{{ dados.nome }}')">
+    ⚠️
+</button>
                     
                     <div class="card-loader-overlay" id="loader-{{ ip | replace('.', '-') }}" style="display: none;">
                         <div class="mini-loader-content" id="content-{{ ip | replace('.', '-') }}">
@@ -140,7 +148,9 @@
 
     <div id="modalCadastro" class="modal-overlay glass">
         <div class="modal-window dashboard-modal">
-            <header class="modal-header"><h2>Novos Parâmetros da Farm</h2><button class="close-btn" onclick="fecharModalCadastro()">&times;</button></header>
+            <header class="modal-header">
+                <h2>Novos Parâmetros da Farm</h2><button class="btn-close-modal" onclick="fecharModalCadastro()">&times;</button>
+            </header>
             <div class="modal-body">
                 <div class="input-modern"><label>Identificação</label><input type="text" id="nomeImpressora" placeholder="Ex: Neptune Max 01"></div>
                 <div class="input-modern"><label>IP de Rede</label><input type="text" id="novoIpImpressora" placeholder="Ex: 100.114.160.35"></div>
@@ -157,7 +167,14 @@
                     <button class="tab-btn active" onclick="switchTab('monitor')">📊 Monitoramento</button>
                     <button class="tab-btn" onclick="switchTab('files')">📂 Arquivos & Memória</button>
                 </nav>
-                <button class="close-btn-cc" onclick="fecharModal()">&times;</button>
+
+                <div class="header-actions" style="display: flex; gap: 10px;">
+        <button id="btnDeletarImpressora" class="btn-delete-printer" title="Excluir esta impressora" onclick="confirmarExclusaoImpressora()">
+            🗑️
+        </button>
+      
+    </div>
+                <button class="btn-close-modal" onclick="fecharModal()">&times;</button>
             </header>
 
             <div class="modal-body-cc">
@@ -236,6 +253,7 @@
         let uploadsAtivos = {};
         let isPollingPaused = false;
         let pollingDeep = null;
+        let nomeImpressoraSelecionada = ''; // Para usar na confirmação de exclusão
 
         // 1. MONITORAMENTO GERAL (Grid e Widgets)
         function atualizarStatusInstantaneo() {
@@ -284,6 +302,35 @@
             document.getElementById(`tab-${tabId}`).classList.add('active');
         }
 
+        // 1. FUNÇÃO PARA CONFIRMAR EXCLUSÃO (Dentro do Modal)
+function confirmarExclusaoImpressora() {
+    if (impressoraSelecionada && nomeImpressoraSelecionada) {
+        const confirmacao = confirm(`⚠️ ATENÇÃO, ROBSON!\n\nTem certeza que deseja EXCLUIR a impressora "${nomeImpressoraSelecionada}" (IP: ${impressoraSelecionada})?\n\nEsta ação removerá a máquina permanentemente da sua farm em Betim.`);
+        
+        if (confirmacao) {
+            removerImpressora(impressoraSelecionada, nomeImpressoraSelecionada);
+        }
+    }
+}
+
+function removerImpressora(ip, nome) {
+    fetch('/remover_impressora', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip: ip })
+    })
+    .then(response => {
+        if (response.ok) {
+            fecharModal(); // Fecha o Command Center
+            // Recarrega a página para atualizar o Grid de Betim
+            window.location.reload(); 
+        } else {
+            alert("Erro ao remover a impressora. Verifique a conexão com o servidor.");
+        }
+    })
+    .catch(err => console.error("Erro na exclusão:", err));
+}
+
         function deepPollingCC() {
     if (!impressoraSelecionada) return;
     fetch(`/api/detalhes_profundos/${impressoraSelecionada}`)
@@ -305,19 +352,41 @@
             }
         }).catch(err => console.error("Erro no Deep Polling:", err));
 }
+        // 1. FUNÇÃO PARA FECHAR O MODAL (Resolve o erro do terminal)
+function fecharModalCadastro() {
+    const modal = document.getElementById('modalCadastro');
+    if (modal) {
+        modal.style.display = "none";
+    }
+}
+
+// 2. FUNÇÃO PARA ABRIR E FORÇAR O FUNDO PRETO
+function abrirModalCadastro() {
+    fecharModal(); // Fecha o Command Center antes de abrir o cadastro
+    const modal = document.getElementById('modalCadastro');
+    if (modal) {
+        modal.style.display = "flex";
+        // Mantendo seu "Force Background" que resolveu o problema do tablet
+        modal.style.backgroundColor = "rgba(0, 0, 0, 0.9)";
+        modal.style.backdropFilter = "blur(15px)";
+    }
+}
 
         function abrirModal(ip, nome) {
-            impressoraSelecionada = ip;
-            document.getElementById('modalImprimir').style.display = "flex";
-            document.getElementById('tituloModal').innerText = nome;
-            document.getElementById('cc-ip-badge').innerText = ip;
-            document.getElementById('fullScreenSuccess').classList.remove('show');
-            
-            switchTab('monitor');
-            carregarPasta(''); 
-            carregarArquivosInternos(); 
-            pollingDeep = setInterval(deepPollingCC, 2000);
-        }
+    fecharModalCadastro(); // Garante que a de cadastro feche antes
+    impressoraSelecionada = ip;
+    nomeImpressoraSelecionada = nome; // Salva o nome para a exclusão
+    
+    document.getElementById('modalImprimir').style.display = "flex";
+    document.getElementById('tituloModal').innerText = nome;
+    document.getElementById('cc-ip-badge').innerText = ip;
+    document.getElementById('fullScreenSuccess').classList.remove('show');
+    
+    switchTab('monitor');
+    carregarPasta(''); 
+    carregarArquivosInternos(); 
+    pollingDeep = setInterval(deepPollingCC, 2000);
+}
 
         function fecharModal() {
             document.getElementById('modalImprimir').style.display = "none";
@@ -354,6 +423,38 @@
                 });
             });
         }
+        // FUNÇÃO PARA ENVIAR O CADASTRO PARA O BACKEND
+function cadastrarNovaImpressora() {
+    const nome = document.getElementById('nomeImpressora').value;
+    const ip = document.getElementById('novoIpImpressora').value;
+
+    // Validação básica para não enviar campos vazios
+    if (!nome || !ip) {
+        alert("⚠️ Por favor, preencha o Nome e o IP da impressora.");
+        return;
+    }
+
+    console.log(`Enviando cadastro: ${nome} - ${ip}`);
+
+    fetch('/cadastrar_impressora', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nome: nome, ip: ip })
+    })
+    .then(response => {
+        if (response.ok) {
+            // Sucesso! Fecha o modal e recarrega a página para mostrar a nova máquina
+            fecharModalCadastro();
+            window.location.reload(); 
+        } else {
+            alert("❌ Erro ao cadastrar. Verifique se o IP já existe ou a conexão com o servidor.");
+        }
+    })
+    .catch(err => {
+        console.error("Erro na requisição de cadastro:", err);
+        alert("🚨 Falha crítica ao conectar com o servidor de Betim.");
+    });
+}
 
         function selecionarArquivo(el, nome) {
             document.querySelectorAll('.item-file').forEach(i => i.classList.remove('selected'));
@@ -365,16 +466,41 @@
         }
 
         function carregarArquivosInternos() {
-            const lista = document.getElementById('listaArquivosInternos');
-            fetch(`/api/arquivos_internos/${impressoraSelecionada}`).then(r => r.json()).then(arquivos => {
-                lista.innerHTML = arquivos.map(f => `
+    const lista = document.getElementById('listaArquivosInternos');
+    // Adiciona um feedback visual de carregamento
+    lista.innerHTML = '<li class="loading-state">Lendo memória da impressora...</li>';
+
+    fetch(`/api/arquivos_internos/${impressoraSelecionada}`)
+        .then(r => r.json())
+        .then(arquivos => {
+            if (arquivos.length === 0) {
+                lista.innerHTML = '<li class="empty-msg">Nenhum arquivo na memória.</li>';
+                return;
+            }
+
+            lista.innerHTML = arquivos.map(f => {
+                // 🛡️ O SEGREDO: Testamos qual chave existe (path ou name)
+                const nomeArquivo = f.path || f.name || "Arquivo s/ nome";
+                const tamanhoMB = (f.size / 1024 / 1024).toFixed(1);
+
+                return `
                     <li class="internal-file-item">
-                        <div><strong>${f.filename}</strong><br><small>${(f.size/1024/1024).toFixed(1)}MB</small></div>
-                        <button onclick="enviarComandoCC('START_PRINT', '${f.filename}')">IMPRIMIR</button>
+                        <div class="file-info">
+                            <strong class="file-name-text">${nomeArquivo}</strong>
+                            <small class="file-size-tag">${tamanhoMB} MB</small>
+                        </div>
+                        <button class="btn-print-internal" onclick="enviarComandoCC('START_PRINT', '${nomeArquivo}')">
+                            IMPRIMIR
+                        </button>
                     </li>
-                `).join('');
-            });
-        }
+                `;
+            }).join('');
+        })
+        .catch(err => {
+            console.error("Erro ao ler Klipper:", err);
+            lista.innerHTML = '<li class="error-msg">Erro ao conectar com a impressora.</li>';
+        });
+}
 
         // 4. ENVIO E COMANDOS
         document.getElementById('btnEnviar').onclick = function() {
@@ -446,6 +572,30 @@ function moverImpressora(eixo, distancia) {
     // Envia sequência: Modo Relativo -> Mover -> Modo Absoluto (Segurança)
     const gcode = `G91\nG1 ${eixo}${distancia} F3000\nG90`;
     enviarComandoCC(gcode);
+}
+
+function paradaDeEmergencia(ip, nome) {
+    // 🛡️ Trava de Segurança: Evita cliques acidentais
+    const confirmar = confirm(`🚨 PARADA DE EMERGÊNCIA!\n\nTem certeza que deseja BLOQUEAR IMEDIATAMENTE a impressora "${nome}"?\n\nIsso cancelará a impressão e desligará os motores.`);
+
+    if (confirmar) {
+        console.log(`!!! DISPARANDO M112 PARA ${ip} !!!`);
+        
+        // Envia o comando G-Code de emergência (M112)
+        fetch('/api/comando_gcode', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                ip: ip, 
+                comando: 'M112' 
+            })
+        }).then(response => {
+            if (response.ok) {
+                alert("🔴 Comando de Emergência Enviado! A máquina foi interrompida.");
+                window.location.reload();
+            }
+        });
+    }
 }
     </script>
 </body>

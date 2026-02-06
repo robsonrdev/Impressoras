@@ -458,7 +458,7 @@ body {
 }
 
 .modal-header-cc {
-    padding: 20px 30px; 
+    padding: 30px 30px 20px 30px !important;
     background: rgba(255, 255, 255, 0.02);
     border-bottom: 1px solid var(--border-glass);
     display: flex; 
@@ -494,14 +494,15 @@ body {
 .command-center-modal {
     margin-top: 0;
     width: 95vw; 
-    height: 92vh; 
-    max-height: 95vh; /* 🛡️ Trava o modal dentro da tela */
+    height: 92dvh; 
+    max-height: 95dvh; /* 🛡️ Trava o modal dentro da tela */
     max-width: 1400px;
     background: #0d0d0f; 
     border-radius: 28px;
     display: flex; 
     flex-direction: column; /* Cabeçalho em cima, corpo embaixo */
     overflow: hidden; /* Impede que o modal inteiro role */
+    margin-top: env(safe-area-inset-top, 20px);
 }
 
 .modal-header { padding: 30px; display: flex; justify-content: space-between; align-items: center; }
@@ -635,25 +636,61 @@ body {
     border: 1px solid var(--border-glass); 
 }
 
-.internal-file-list { list-style: none; margin-top: 15px; max-height: 400px; overflow-y: auto; }
+.internal-file-list {
+    margin-top: 15px;
+    padding: 0;
+}
 
 .internal-file-item {
-    display: flex; 
-    justify-content: space-between; 
+    display: flex;
+    justify-content: space-between;
     align-items: center;
-    padding: 12px 15px; 
-    border-bottom: 1px solid rgba(255,255,255,0.05);
+    padding: 15px;
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 12px;
+    margin-bottom: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    transition: all 0.3s ease;
+}
+.internal-file-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(46, 204, 113, 0.3);
 }
 
-.btn-print-internal { 
-    background: #2ecc71; 
-    color: #000; 
-    border: none; 
-    padding: 8px 15px; 
-    border-radius: 8px; 
-    font-weight: 800; 
-    cursor: pointer; 
+.file-name-text {
+    display: block;
+    color: var(--text-main);
+    font-size: 0.9rem;
+    margin-bottom: 2px;
 }
+
+.file-size-tag {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+}
+/* O BOTÃO "IMPRIMIR" TURBINADO */
+.btn-print-internal {
+    background: #2ecc71; /* Verde de Sucesso */
+    color: #0a0a0b;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-weight: 800;
+    font-size: 0.75rem;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 4px 12px rgba(46, 204, 113, 0.2);
+}
+.btn-print-internal:hover {
+    background: #27ae60;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 15px rgba(46, 204, 113, 0.4);
+}
+.btn-print-internal:active {
+    transform: translateY(0);
+}
+
 /* Cards Clicáveis */
 .temp-card.interactable {
     cursor: pointer;
@@ -785,7 +822,14 @@ body {
     .dashboard-modal {
         width: 95%;
         max-height: 90vh;
+        z-index: 5000;
+        margin: auto;
     }
+    .top-btn {
+    padding: 10px 20px !important;
+    font-size: 0.8rem !important;
+    white-space: nowrap;
+}
 
     .btn-primary-dashboard.big {
         padding: 22px; /* Área de clique maior para o polegar */
@@ -807,6 +851,108 @@ body {
     align-items: center;
     gap: 8px;
     font-weight: 600;
+}
+
+/* ==========================================================================
+   BOTÕES DE FECHAR (ESTILO UNIFICADO)
+   ========================================================================== */
+.btn-close-modal {
+    background: rgba(255, 255, 255, 0.08); /* Fundo sutil */
+    border: none;
+    color: var(--text-muted);
+    width: 32px;
+    height: 32px;
+    border-radius: 50%; /* Circular para um look moderno */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.4rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    backdrop-filter: blur(5px);
+}
+
+.btn-close-modal:hover {
+    background: rgba(255, 59, 48, 0.2); /* Vermelho suave ao passar o mouse */
+    color: #ff3b30;
+    transform: rotate(90deg); /* Pequena rotação para feedback visual */
+}
+
+/* Botão de Excluir no Cabeçalho do Modal */
+.btn-delete-printer {
+    background: rgba(255, 59, 48, 0.1);
+    border: none;
+    color: #ff3b30;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.btn-delete-printer:hover {
+    background: #ff3b30;
+    color: white;
+    box-shadow: 0 4px 12px rgba(255, 59, 48, 0.3);
+}
+
+.btn-emergency-stop {
+    position: absolute;
+    font-size: 1.1rem !important; /* Reduzimos levemente o tamanho para o emoji não "vazar" */
+    top: 15px;
+    right: 15px;
+    background: rgba(255, 59, 48, 0.2); /* Vermelho translúcido */
+    border: 2px solid #ff3b30;
+    color: #ff3b30;
+    width: 38px;
+    height: 38px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.6rem;
+    font-weight: bold;
+    cursor: pointer;
+    z-index: 20;
+    padding-bottom: 2px; /* Compensação para centralização óptica do emoji */
+    transition: all 0.2s ease;
+}
+
+.btn-emergency-stop:hover {
+    background: #ff3b30; /* Vermelho sólido no hover */
+    color: white;
+    box-shadow: 0 0 15px rgba(255, 59, 48, 0.6);
+    transform: scale(1.1);
+}
+/* ==========================================================================
+   HOTFIX: Fundo do Modal de Cadastro
+   ========================================================================== */
+.modalCadastro.modal-overlay {
+    /* Garante uma cor de fundo escura e sólida com transparência */
+    background-color: rgba(10, 10, 11, 0.9) !important; 
+    
+    /* Reforça o efeito de blur se o navegador do tablet suportar */
+    backdrop-filter: blur(20px) !important;
+    -webkit-backdrop-filter: blur(20px) !important; /* Para iPads/Safari */
+    
+    /* Garante que ele cubra toda a área */
+    display: none; /* O JS muda para flex */
+    position: fixed;
+    top: 0; left: 0;
+    width: 100vw; height: 100vh;
+    z-index: 5000;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Quando ativo pelo JS, ele usa Flex para centralizar o formulário */
+.modalCadastro[style*="display: flex"] {
+    display: flex !important;
 }
 
 /* Overlay de fundo */
@@ -894,6 +1040,12 @@ body {
         padding: 10px 20px;
         position: sticky; top: 0;
         z-index: 1000; /* Baixamos para o modal cobrir */
+    }
+
+    .command-center-modal {
+        /* No tablet, damos um pouco mais de margem lateral */
+        width: 95vw;
+        height: 88dvh; /* Um pouco menor para garantir que o rodapé apareça */
     }
 
     .brand-text, .nav-item span:not(.icon) { display: none; }
