@@ -4,6 +4,7 @@ import threading
 import requests
 import socket
 import urllib.parse
+import json
 from flask import Flask, render_template, request, jsonify
 from concurrent.futures import ThreadPoolExecutor
 
@@ -11,19 +12,42 @@ app = Flask(__name__)
 
 # --- CONFIGURAÇÕES ---
 PASTA_RAIZ = os.path.abspath(r'/app/gcodes') 
-IP_BASE = "192.168.1."
-RANGE_IPS = (1, 255) 
+ARQUIVO_BANCO = 'impressores.json' 
 
-# Dicionários Globais - Memória Permanente da Farm
+# Dicionários Globais - Memória de Status
 IMPRESSORAS_ENCONTRADAS = {}
 PROGRESSO_UPLOAD = {} 
+
+ARQUIVO_PRODUCAO = 'producao_diaria.json'
+ULTIMO_STATUS_MAQUINAS = {} # Para detectar a transição de status
 
 # --- ESTABILIDADE DE REDE ---
 SESSAO_REDE = requests.Session()
 SESSAO_REDE.headers.update({'Connection': 'keep-alive'})
 FALHAS_CONSECUTIVAS = {}
 
-# --- CLASSE MONITOR (TRANSMISSÃO) ---
+# --- AUXILIARES DE PERSISTÊNCIA (IP + NOME) ---
+def carregar_maquinas():
+    """Lê a lista de máquinas e mantém a ordem de cadastro"""
+    if not os.path.exists(ARQUIVO_BANCO):
+        return []
+    try:
+        with open(ARQUIVO_BANCO, 'r') as f:
+            return json.load(f) # Retorna [{"ip": "...", "nome": "..."}, ...]
+    except:
+        return []
+
+def salvar_maquina(ip, nome):
+    """Adiciona nova máquina ao fim do arquivo para manter sua ordem"""
+    maquinas = carregar_maquinas()
+    if not any(m['ip'] == ip for m in maquinas):
+        maquinas.append({"ip": ip, "nome": nome})
+        with open(ARQUIVO_BANCO, 'w') as f:
+            json.dump(maquinas, f, indent=4)
+        return True
+    return False
+
+# --- CLASSE MONITOR (Transmissão de GCODE) ---
 class Monitor:
     def __init__(self, file, ip_alvo):
         self.file = file
@@ -44,7 +68,7 @@ class Monitor:
     def __getattr__(self, attr):
         return getattr(self.file, attr)
 
-# --- FUNÇÕES DE REDE ---
+# --- FUNÇÕES DE REDE E MONITORAMENTO ---
 def testar_conexao_rapida(ip, porta=80):
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -54,10 +78,81 @@ def testar_conexao_rapida(ip, porta=80):
         return resultado == 0
     except: return False
 
-def verificar_ip(i):
-    """Mapeia TODOS os status e atualiza em tempo real"""
-    ip = f"{IP_BASE}{i}"
+
+
+# ==========================================================================
+# NOVAS ROTAS PARA O COMMAND CENTER (ABAS DE DETALHES)
+# ==========================================================================
+
+@app.route('/api/detalhes_profundos/<ip>')
+def detalhes_profundos(ip):
+    """Busca Temperaturas e Console com tratamento de erro robusto"""
+    try:
+        # 1. Busca Temperaturas (Query Objects)
+        url_status = f"http://{ip}/printer/objects/query?extruder&heater_bed&print_stats&display_status"
+        resp_s = SESSAO_REDE.get(url_status, timeout=1.5) # Timeout curto para não travar o app
+        
+        # 2. Busca o Console (Gcode Store)
+        url_console = f"http://{ip}/server/gcode_store"
+        resp_c = SESSAO_REDE.get(url_console, timeout=1.5)
+        
+        # Verifica se as requisições foram bem sucedidas antes de processar
+        # --- DENTRO DA ROTA detalhes_profundos ---
+        if resp_s.status_code == 200 and resp_c.status_code == 200:
+            dados_s = resp_s.json()
+            dados_c = resp_c.json()
+            
+            # 🛡️ CORREÇÃO: Acessando a lista correta 'gcode_store' antes de fatiar
+            logs_brutos = dados_c.get('result', {}).get('gcode_store', [])
+            
+            result = {
+                "status": dados_s.get('result', {}).get('status', {}),
+                "console": logs_brutos[-12:] if isinstance(logs_brutos, list) else [] 
+            }
+            return jsonify(result)
+        else:
+            print(f"⚠️ Erro de API na impressora {ip}: Status {resp_s.status_code}/{resp_c.status_code}")
+            return jsonify({"error": "Impressora não respondeu corretamente"}), 400
+
+    except Exception as e:
+        # 🚨 Este log aparecerá no seu terminal do VS Code / CMD
+        print(f"🚨 ERRO CRÍTICO na rota detalhes ({ip}): {str(e)}")
+        return jsonify({"error": "Falha na comunicação de rede"}), 500
+
+@app.route('/api/arquivos_internos/<ip>')
+def arquivos_internos(ip):
+    """Lista os arquivos salvos na memória da impressora (Trabalhos)"""
+    try:
+        url = f"http://{ip}/server/files/list?root=gcodes"
+        resp = SESSAO_REDE.get(url, timeout=3.0).json()
+        
+        # Organiza os arquivos por data de modificação (mais recentes primeiro)
+        arquivos = sorted(resp.get('result', []), key=lambda x: x.get('modified', 0), reverse=True)
+        return jsonify(arquivos)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/comando_gcode', methods=['POST'])
+def comando_gcode():
+    """Envia comandos manuais (Pausa, Cancela, G-Code)"""
+    dados = request.json
+    ip = dados.get('ip')
+    comando = dados.get('comando') # Ex: "PAUSE", "CANCEL", "G28"
     
+    try:
+        # Traduz comandos simples para a API do Klipper
+        if comando == "PAUSE": url = f"http://{ip}/printer/print/pause"
+        elif comando == "RESUME": url = f"http://{ip}/printer/print/resume"
+        elif comando == "CANCEL": url = f"http://{ip}/printer/print/cancel"
+        else: url = f"http://{ip}/printer/gcode/script?script={urllib.parse.quote(comando)}"
+        
+        SESSAO_REDE.post(url, timeout=5.0)
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)})
+
+def verificar_ip(ip, nome_personalizado):
+    """Atualiza o status e gerencia a contagem de produção"""
     if not testar_conexao_rapida(ip):
         if ip in IMPRESSORAS_ENCONTRADAS:
             FALHAS_CONSECUTIVAS[ip] = FALHAS_CONSECUTIVAS.get(ip, 0) + 1
@@ -76,32 +171,34 @@ def verificar_ip(i):
             status_klipper = dados['result']['status']['print_stats']['state']
             filename = dados['result']['status']['print_stats']['filename']
             progresso = int(dados['result']['status']['display_status']['progress'] * 100)
+
+            # --- 🚀 LÓGICA DE PRODUÇÃO (DENTRO DA FUNÇÃO) ---
+            status_anterior = ULTIMO_STATUS_MAQUINAS.get(ip)
             
-            # --- MAPEAMENTO COMPLETO DE STATUS AO VIVO ---
+            # GATILHO: Mudou de "printing" para "complete"
+            if status_anterior == "printing" and status_klipper == "complete":
+                if filename and filename != "Nenhum": # 🛡️ Impede contagem de erro
+                    registrar_conclusao(filename)
+            
+            # Atualiza a memória de status para a próxima verificação
+            ULTIMO_STATUS_MAQUINAS[ip] = status_klipper
+            
+            # Mapeamento de Status para o Dashboard Pro
             if status_klipper == "printing":
-                msg_exibicao = f"IMPRIMINDO {progresso}%"
-                cor_status = "printing"
+                msg_exibicao, cor_status = f"IMPRIMINDO {progresso}%", "printing"
             elif status_klipper in ["startup", "busy"]:
-                msg_exibicao = "PREPARANDO / AQUECENDO"
-                cor_status = "printing"
+                msg_exibicao, cor_status = "PREPARANDO", "printing"
             elif status_klipper == "paused":
-                msg_exibicao = "PAUSADO"
-                cor_status = "paused"
+                msg_exibicao, cor_status = "PAUSADO", "paused"
             elif status_klipper == "complete":
-                msg_exibicao = "CONCLUÍDO"
-                cor_status = "ready"
-            elif status_klipper == "error":
-                msg_exibicao = "ERRO NA MÁQUINA"
-                cor_status = "offline"
-            elif status_klipper == "standby" or status_klipper == "ready" or status_klipper == "idle":
-                msg_exibicao = "PRONTA"
-                cor_status = "ready"
+                msg_exibicao, cor_status = "CONCLUÍDO", "ready"
+            elif status_klipper in ["standby", "ready", "idle"]:
+                msg_exibicao, cor_status = "PRONTA", "ready"
             else:
-                msg_exibicao = status_klipper.upper()
-                cor_status = "ready"
+                msg_exibicao, cor_status = "OFFLINE", "offline"
             
             IMPRESSORAS_ENCONTRADAS[ip] = {
-                'nome': f"MÁQUINA {i}",
+                'nome': nome_personalizado,
                 'modelo_real': "Neptune 4 MAX",
                 'status': status_klipper,
                 'cor': cor_status,
@@ -111,77 +208,87 @@ def verificar_ip(i):
                 'arquivo': filename if filename else "Nenhum",
                 'progresso': progresso
             }
-    except: 
-        if ip in IMPRESSORAS_ENCONTRADAS:
-            FALHAS_CONSECUTIVAS[ip] = FALHAS_CONSECUTIVAS.get(ip, 0) + 1
-            if FALHAS_CONSECUTIVAS[ip] >= 3:
-                IMPRESSORAS_ENCONTRADAS[ip].update({'status': 'offline', 'cor': 'offline', 'msg': 'OFFLINE'})
+    except Exception as e:
+        print(f"Erro ao monitorar {ip}: {e}")
 
-def scanner_inteligente():
-    with ThreadPoolExecutor(max_workers=50) as executor:
-        executor.map(verificar_ip, range(RANGE_IPS[0], RANGE_IPS[1]))
+def monitor_inteligente():
+    """Monitora as máquinas respeitando a ordem do arquivo"""
     while True:
-        time.sleep(3)
-        if IMPRESSORAS_ENCONTRADAS:
-            ips_memoria = [int(ip.split('.')[-1]) for ip in IMPRESSORAS_ENCONTRADAS.keys()]
+        maquinas = carregar_maquinas()
+        if maquinas:
             with ThreadPoolExecutor(max_workers=15) as executor:
-                executor.map(verificar_ip, ips_memoria)
+                for m in maquinas:
+                    executor.submit(verificar_ip, m['ip'], m['nome'])
+        time.sleep(3)
 
-threading.Thread(target=scanner_inteligente, daemon=True).start()
+threading.Thread(target=monitor_inteligente, daemon=True).start()
 
-# --- LÓGICA DE UPLOAD E SUCESSO IMEDIATO ---
-# --- REVISÃO DA TAREFA DE UPLOAD NO app.py ---
-
-# --- TAREFA DE UPLOAD COM GATILHO POR LOG DE PREPARAÇÃO ---
-
+# --- LÓGICA DE UPLOAD ---
 def tarefa_upload(ip_alvo, caminho_completo):
     try:
         nome_arquivo = os.path.basename(caminho_completo)
-        
-        # 1. Realiza o Upload (0-90%)
         with open(caminho_completo, 'rb') as f:
             monitor = Monitor(f, ip_alvo)
             files = {'file': (nome_arquivo, monitor)}
             SESSAO_REDE.post(f"http://{ip_alvo}/server/files/upload", files=files, timeout=900)
         
-        # 2. Pequena pausa para o Moonraker registrar o arquivo
         time.sleep(1.5) 
-        
-        # 🚀 3. O PONTO DE GATILHO (Foco Total no Código)
-        # No momento em que este status aparece, a impressora já recebe o sinal
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": 95, "msg": "Enviando comando de início..."}
-        
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": 95, "msg": "Iniciando..."}
         nome_url = urllib.parse.quote(nome_arquivo)
         
-        # Envia o comando de Start. Usamos um try/except para que, 
-        # mesmo se a impressora demorar a responder (timeout), o fluxo siga.
         try:
             SESSAO_REDE.post(f"http://{ip_alvo}/printer/print/start?filename={nome_url}", timeout=10)
-        except Exception:
-            # Se der timeout mas a máquina começou a mexer (como você observou), ignoramos o erro
-            pass
+        except: pass
 
-        # ⏳ 4. O TEMPO DE ESPERA SOLICITADO
-        # A impressora já está se movendo em Betim. Esperamos 1s para o efeito visual.
         time.sleep(1) 
-        
-        # ✅ SUCESSO FORÇADO PELO CÓDIGO (Trigger p: 100)
-        # Isso faz o JavaScript disparar a tela laranja imediatamente
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": 100, "msg": "Sucesso! Bom trabalho."}
-        
-        # Sincronização em segundo plano para o card atualizar depois
-        verificar_ip(int(ip_alvo.split('.')[-1]))
-
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": 100, "msg": "Sucesso!"}
     except Exception as e:
-        print(f"Erro no fluxo de upload para {ip_alvo}: {e}")
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": "FALHA: Erro de Rede"}
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": "Erro de Rede"}
+
+def registrar_conclusao(nome_arquivo):
+    """🛡️ Registra a peça e salva no disco"""
+    if not nome_arquivo or nome_arquivo == "Nenhum": 
+        return
+        
+    dados = carregar_producao_24h()
+    nome_limpo = nome_arquivo.replace('.gcode', '').replace('.bgcode', '')
+    
+    # Incrementa o contador da peça específica
+    dados["itens"][nome_limpo] = dados["itens"].get(nome_limpo, 0) + 1
+    
+    # Salva fisicamente para persistência em Betim
+    try:
+        with open(ARQUIVO_PRODUCAO, 'w') as f:
+            json.dump(dados, f, indent=4)
+    except Exception as e:
+        print(f"Erro ao salvar produção: {e}")
 
 # --- ROTAS FLASK ---
 @app.route('/')
 def index():
-    ordenadas = dict(sorted(IMPRESSORAS_ENCONTRADAS.items(), key=lambda item: int(item[0].split('.')[-1])))
+    """Renderiza as máquinas na ordem exata do arquivo JSON"""
+    maquinas_cadastradas = carregar_maquinas()
+    lista_final = {}
+    
+    # Reconstrói o dicionário na ordem do JSON para o Template
+    for m in maquinas_cadastradas:
+        ip = m['ip']
+        if ip in IMPRESSORAS_ENCONTRADAS:
+            lista_final[ip] = IMPRESSORAS_ENCONTRADAS[ip]
+        else:
+            # Caso a máquina ainda não tenha sido monitorada no primeiro boot
+            lista_final[ip] = {'nome': m['nome'], 'ip': ip, 'status': 'offline', 'cor': 'offline', 'msg': 'CONECTANDO...', 'progresso': 0, 'imagem': 'n4max.png', 'modelo_real': 'Neptune 4 MAX'}
+
     disponiveis = sum(1 for p in IMPRESSORAS_ENCONTRADAS.values() if p.get('status') in ['ready', 'idle'])
-    return render_template('index.html', impressoras=ordenadas, disponiveis=disponiveis)
+    return render_template('index.html', impressoras=lista_final, disponiveis=disponiveis)
+
+@app.route('/cadastrar_impressora', methods=['POST'])
+def cadastrar_impressora():
+    dados = request.json
+    ip, nome = dados.get('ip'), dados.get('nome')
+    if ip and nome and salvar_maquina(ip, nome):
+        return jsonify({"success": True})
+    return jsonify({"success": False, "message": "IP já existe ou dados inválidos"})
 
 @app.route('/status_atualizado')
 def status_atualizado():
@@ -214,6 +321,45 @@ def navegar():
         "pastas": sorted([f for f in itens if os.path.isdir(os.path.join(caminho_alvo, f))]),
         "arquivos": sorted([f for f in itens if f.endswith(('.gcode', '.bgcode'))])
     })
+
+@app.route('/remover_impressora', methods=['POST'])
+def remover_impressora():
+    ip = request.json.get('ip')
+    maquinas = carregar_maquinas()
+    
+    # Filtra a lista removendo o IP selecionado
+    novas_maquinas = [m for m in maquinas if m['ip'] != ip]
+
+    if len(novas_maquinas) < len(maquinas):
+        # Salva a nova lista no banco de dados
+        with open(ARQUIVO_BANCO, 'w') as f:
+            json.dump(novas_maquinas, f, indent=4)
+        
+        # Remove da memória de monitoramento
+        if ip in IMPRESSORAS_ENCONTRADAS:
+            del IMPRESSORAS_ENCONTRADAS[ip]
+            
+        return jsonify({"success": True})
+    
+    return jsonify({"success": False, "message": "Impressora não encontrada"})
+
+def carregar_producao_24h():
+    if not os.path.exists(ARQUIVO_PRODUCAO):
+        return {"data": time.strftime("%Y-%m-%d"), "itens": {}}
+    with open(ARQUIVO_PRODUCAO, 'r') as f:
+        dados = json.load(f)
+        # Reseta se mudar o dia
+        if dados.get("data") != time.strftime("%Y-%m-%d"):
+            return {"data": time.strftime("%Y-%m-%d"), "itens": {}}
+        return dados
+
+
+@app.route('/dados_producao_diaria')
+def dados_producao_diaria():
+    """Envia os dados de contagem para o widget 'Concluídos (24h)'"""
+    return jsonify(carregar_producao_24h())
+
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)

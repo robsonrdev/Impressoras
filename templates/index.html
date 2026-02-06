@@ -3,11 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Painel de Controle 3D - PRO</title>
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+    <title>Dashboard 3D - SuperTech Farm Control PRO</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body>
+<body class="dashboard-theme">
 
     <div id="fullScreenSuccess" class="fullscreen-overlay">
         <div class="success-content">
@@ -17,315 +17,436 @@
                     <path class="check-path" d="M30 50 L45 65 L70 35"/>
                 </svg>
             </div>
-            <h1 class="success-title">Concluido</h1>
-            <p id="subtituloSucesso" class="success-subtitle">Preparando impressora</p>
+            <h1 class="success-title">Concluído</h1>
+            <p id="subtituloSucesso" class="success-subtitle">Sincronizando com a impressora...</p>
         </div>
     </div>
 
-    <header class="main-header">
-        <div class="header-container">
-            <div class="logo-area">
-                <img src="/static/img/logo.png" alt="Logo" class="company-logo">
-            </div>
-            <div class="stats-bar">
-                <div class="stat-group">
-                    <span class="stat-item">🟢 Prontas: <strong id="countDisp">{{ disponiveis }}</strong></span>
+    <div class="app-layout">
+        <aside class="sidebar">
+            <div class="sidebar-brand">
+                <img src="/static/img/logo.png" alt="Logo" class="brand-logo">
+                <div class="brand-text">
+                    <span class="brand-name">SuperTech <span class="orange">3D</span></span>
+                    <span class="brand-sub">Farm Control</span>
                 </div>
             </div>
-            <div class="header-title">
-                <h1>Central de Impressão <span class="highlight">PRO</span></h1>
-                <p>Monitoramento de Farm - Betim</p>
+
+            <nav class="sidebar-nav">
+                <a href="#" class="nav-item active"><span class="icon">📊</span> Dashboard</a>
+                <a href="#" class="nav-item"><span class="icon">📂</span> Biblioteca G-Code</a>
+                <a href="#" class="nav-item"><span class="icon">📈</span> Estatísticas</a>
+                <a href="#" class="nav-item"><span class="icon">⚙️</span> Configurações</a>
+            </nav>
+
+            <button class="status-toggler" onclick="toggleStatusDrawer()">
+                <span class="icon">📊</span> <span class="label">Status Farm</span>
+            </button>
+
+            <div class="sidebar-footer">
+                <button onclick="abrirModalCadastro()" class="btn-new-printer">
+                    <span class="plus-icon">+</span> Nova Impressora
+                </button>
             </div>
-        </div>
-    </header>
+        </aside>
 
-    <main class="main-content">
-        <div class="grid-responsive">
-            {% for ip, dados in impressoras.items() %}
-            <section class="card {{ dados.cor }}" onclick="abrirModal('{{ ip }}', '{{ dados.nome }}')">
-
-            <div class="card-loader-overlay" id="loader-{{ ip | replace('.', '-') }}" style="display: none;">
-    <div class="mini-loader-content" id="content-{{ ip | replace('.', '-') }}">
-        <div class="mini-upload-track">
-            <div class="mini-upload-fill" id="fill-{{ ip | replace('.', '-') }}"></div>
-        </div>
-        <div class="mini-status-row">
-            <span id="pct-{{ ip | replace('.', '-') }}">0%</span>
-            <p id="msg-{{ ip | replace('.', '-') }}">Enviando...</p>
-        </div>
-    </div>
-
-    <div class="mini-success-view" id="success-{{ ip | replace('.', '-') }}" style="display: none;">
-    <div class="sophisticated-check mini">
-        <svg viewBox="0 0 100 100">
-            <circle class="bg-circle" cx="50" cy="50" r="45"/>
-            <path class="check-path" d="M30 50 L45 65 L70 35"/>
-        </svg>
-    </div>
-</div>
-</div>
-                <div class="card-header-row">
-                    <span class="badge-id">#{{ loop.index }}</span>
-                    <div class="status-badge">
-                        <span class="status-dot {{ 'printing' if dados.status == 'printing' else '' }}"></span>
-                        <span class="status-label status-text">{{ dados.msg }}</span>
+        <main class="main-viewport">
+            <header class="top-bar">
+                <div class="welcome-text">
+                    <h1>Olá, Robson!</h1>
+                    <p>Monitoramento de Farm - <strong>Betim</strong></p>
+                </div>
+                <div class="top-bar-actions">
+                    <div class="search-box">
+                        <span class="search-icon">🔍</span>
+                        <input type="text" placeholder="Buscar impressora...">
                     </div>
                 </div>
+                <div id="statusOverlay" class="status-drawer-overlay" onclick="toggleStatusDrawer()"></div>
+            </header>
 
-                <div class="card-body-row">
-                    <div class="printer-thumb">
-                        <img src="{{ url_for('static', filename='img/' + dados.imagem) }}" alt="Printer">
-                    </div>
-                    <div class="printer-info">
-                        <h2>{{ dados.modelo_real }}</h2>
-                        <code class="ip-tag">{{ ip }}</code>
-                    </div>
-                </div>
-
-                <div class="info-impressao" style="display: {{ 'block' if dados.status in ['printing', 'paused'] else 'none' }};">
-                    <div class="progress-section">
-                        <div class="progress-bar-track">
-                            <div class="progress-bar-fill barra-progresso" style="width: {{ dados.progresso }}%;"></div>
+            <section class="summary-widgets">
+                <div class="widget-card main-stats">
+                    <h3>Status Geral</h3>
+                    <div class="stats-row">
+                        <div class="stat-box">
+                            <span class="val" id="countDisp">{{ disponiveis }}</span>
+                            <span class="lbl">Prontas</span>
+                        </div>
+                        <div class="stat-box">
+                            <span class="val highlight">{{ impressoras|length }}</span>
+                            <span class="lbl">Total Máquinas</span>
                         </div>
                     </div>
                 </div>
+
+                <div class="widget-card glass production-widget">
+                    <div class="production-header"><span class="widget-icon">⚡</span><h4>Linha de Produção</h4></div>
+                    <div class="production-scroll-area">
+                        <ul id="listaProducaoAtiva" class="production-list">
+                            <li class="empty-msg">Aguardando início...</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="widget-card glass production-widget">
+                    <div class="production-header"><span class="widget-icon">✅</span><h4>Concluídos (24h)</h4></div>
+                    <div class="production-scroll-area">
+                        <ul id="listaProducaoConcluida" class="production-list">
+                            <li class="empty-msg">Nenhuma peça hoje</li>
+                        </ul>
+                    </div>
+                </div>
             </section>
-            {% endfor %}
-        </div>
-    </main>
 
-    <div id="modalImprimir" class="modal-overlay">
-        <div class="modal-window">
-            <header class="modal-header">
-                <h2 id="tituloModal">Selecionar Arquivo</h2>
-                <button class="close-btn" onclick="fecharModal()">&times;</button>
-            </header>
+            <div class="grid-responsive">
+                {% for ip, dados in impressoras.items() %}
+                <section class="card-pro {{ dados.cor }}" onclick="abrirModal('{{ ip }}', '{{ dados.nome }}')">
+                    <button class="delete-btn-glass" onclick="event.stopPropagation(); removerImpressora('{{ ip }}', '{{ dados.nome }}')">&times;</button>
+                    
+                    <div class="card-loader-overlay" id="loader-{{ ip | replace('.', '-') }}" style="display: none;">
+                        <div class="mini-loader-content" id="content-{{ ip | replace('.', '-') }}">
+                            <div class="mini-upload-track"><div class="mini-upload-fill" id="fill-{{ ip | replace('.', '-') }}"></div></div>
+                            <div class="mini-status-row"><span id="pct-{{ ip | replace('.', '-') }}">0%</span><p id="msg-{{ ip | replace('.', '-') }}">Enviando...</p></div>
+                        </div>
+                        <div class="mini-success-view" id="success-{{ ip | replace('.', '-') }}" style="display: none;">
+                            <div class="sophisticated-check mini"><svg viewBox="0 0 100 100"><circle class="bg-circle" cx="50" cy="50" r="45"/><path class="check-path" d="M30 50 L45 65 L70 35"/></svg></div>
+                        </div>
+                    </div>
 
-            <div class="breadcrumb-bar">
-                <button id="btnVoltar" onclick="voltarPasta()" class="btn-back" disabled>⬅ Voltar</button>
-                <div class="path-display" id="caminhoAtual">/raiz</div>
+                    <div class="card-top">
+                        <div class="status-pill">
+                            <span class="status-dot {{ 'printing' if dados.status == 'printing' else '' }}"></span>
+                            <span class="status-text">{{ dados.msg }}</span>
+                        </div>
+                    </div>
+
+                    <div class="printer-visual">
+                        <img src="{{ url_for('static', filename='img/' + dados.imagem) }}" alt="Printer">
+                    </div>
+
+                    <div class="card-footer-info">
+                        <div class="printer-titles"><h2>{{ dados.nome }}</h2><code class="ip-address">{{ ip }}</code></div>
+                        <div class="progress-area" style="display: {{ 'block' if dados.status in ['printing', 'paused'] else 'none' }};">
+                            <div class="progress-meta"><span>Progresso</span><span class="pct-val">{{ dados.progresso }}%</span></div>
+                            <div class="progress-track"><div class="progress-fill barra-progresso" style="width: {{ dados.progresso }}%;"></div></div>
+                        </div>
+                    </div>
+                </section>
+                {% endfor %}
             </div>
+        </main>
+    </div>
 
-            <div class="file-explorer-container">
-                <ul id="listaGcodes" class="file-list">
-                    <li class="loading-state">Conectando...</li>
-                </ul>
+    <div id="modalCadastro" class="modal-overlay glass">
+        <div class="modal-window dashboard-modal">
+            <header class="modal-header"><h2>Novos Parâmetros da Farm</h2><button class="close-btn" onclick="fecharModalCadastro()">&times;</button></header>
+            <div class="modal-body">
+                <div class="input-modern"><label>Identificação</label><input type="text" id="nomeImpressora" placeholder="Ex: Neptune Max 01"></div>
+                <div class="input-modern"><label>IP de Rede</label><input type="text" id="novoIpImpressora" placeholder="Ex: 100.114.160.35"></div>
             </div>
-
-            <div id="containerProgresso" class="upload-container" style="display: none;">
-                <div class="progress-label-row">
-                    <span id="statusUploadTxt">Transmitindo...</span>
-                    <span id="porcentagemUploadTxt">0%</span>
-                </div>
-                <div class="upload-track">
-                    <div id="barraProgressoUpload" class="upload-fill"></div>
-                </div>
-            </div>
-
-            <footer class="modal-footer">
-                <button id="btnEnviar" class="btn-action" disabled>SELECIONE UM ARQUIVO</button>
-            </footer>
+            <footer class="modal-footer"><button onclick="cadastrarNovaImpressora()" class="btn-primary-dashboard">CONFIRMAR CADASTRO</button></footer>
         </div>
     </div>
 
-<script>
-    // --- ESTADO GLOBAL ÚNICO ---
-    let impressoraSelecionada = '';
-    let pastaAtual = '';
-    let uploadsAtivos = {}; // Objeto para gerenciar múltiplos intervalos: { "IP": IntervalID }
-    let isPollingPaused = false;
+    <div id="modalImprimir" class="modal-overlay glass">
+        <div class="modal-window command-center-modal">
+            <header class="modal-header-cc">
+                <div class="cc-title"><h2 id="tituloModal">Comandar Impressora</h2><span id="cc-ip-badge" class="ip-tag-cc">0.0.0.0</span></div>
+                <nav class="cc-tabs">
+                    <button class="tab-btn active" onclick="switchTab('monitor')">📊 Monitoramento</button>
+                    <button class="tab-btn" onclick="switchTab('files')">📂 Arquivos & Memória</button>
+                </nav>
+                <button class="close-btn-cc" onclick="fecharModal()">&times;</button>
+            </header>
 
-    // --- 1. Sincronização de Status (Dashboard) ---
-    function atualizarStatusInstantaneo() {
-        // Se estivermos enviando um arquivo, pausamos o monitoramento geral
-        if (isPollingPaused) return; 
+            <div class="modal-body-cc">
+                <div id="tab-monitor" class="tab-content active">
+                    <div class="cc-grid">
+                        <div class="cc-panel telemetry-panel">
+                            <h3>Controles de Hardware</h3>
+                            <div class="temp-grid">
+                                <div class="temp-card interactable" onclick="configurarTemperatura('extruder')">
+                                    <span class="temp-label">🔥 Extrusora</span>
+                                    <div class="temp-value"><span id="temp-ext-cur">0</span>°C <small>/ <span id="temp-ext-tar">0</span>°C</small></div>
+                                </div>
+                                <div class="temp-card interactable" onclick="configurarTemperatura('heater_bed')">
+                                    <span class="temp-label">🌡️ Mesa</span>
+                                    <div class="temp-value"><span id="temp-bed-cur">0</span>°C <small>/ <span id="temp-bed-tar">0</span>°C</small></div>
+                                </div>
+                            </div>
 
-        fetch('/status_atualizado')
-            .then(r => r.json())
-            .then(data => {
-                const dispEl = document.getElementById('countDisp');
-                if(dispEl) dispEl.innerText = data.total_disponiveis;
+                            <div class="cc-actions-row">
+                                <button class="btn-cc-action pause" onclick="enviarComandoCC('PAUSE')">⏸</button>
+                                <button class="btn-cc-action resume" onclick="enviarComandoCC('RESUME')">▶</button>
+                                <button class="btn-cc-action cancel" onclick="enviarComandoCC('CANCEL')">⏹</button>
+                            </div>
+
+                            <div class="movement-control-container">
+                                <h4>Movimentação (Eixos X/Y)</h4>
+                                <div class="d-pad">
+                                    <button class="jog-btn up" onclick="moverImpressora('Y', 10)">↑</button>
+                                    <div class="jog-row">
+                                        <button class="jog-btn left" onclick="moverImpressora('X', -10)">←</button>
+                                        <button class="jog-btn home" onclick="enviarComandoCC('G28')">🏠</button>
+                                        <button class="jog-btn right" onclick="moverImpressora('X', 10)">→</button>
+                                    </div>
+                                    <button class="jog-btn down" onclick="moverImpressora('Y', -10)">↓</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="cc-panel console-panel">
+                            <h3>Console G-Code</h3>
+                            <div id="cc-console-log" class="console-log"></div>
+                        
+                        </div>
+                    </div> 
+                </div>
+
+                <div id="tab-files" class="tab-content">
+                    <div class="cc-files-layout">
+                        <div class="cc-file-section">
+                            <h3>Biblioteca Central (Betim)</h3>
+                            <div class="breadcrumb-glass">
+                                <button id="btnVoltar" onclick="voltarPasta()" class="btn-icon-back">⬅</button>
+                                <div id="caminhoAtual" class="path-display">/raiz</div>
+                            </div>
+                            <ul id="listaGcodes" class="file-grid-modern"></ul>
+                            <div id="containerProgresso" class="upload-widget-modal" style="display: none;">
+                                <div class="upload-labels"><span>Transmitindo...</span><strong id="porcentagemUploadTxt">0%</strong></div>
+                                <div class="upload-bar-track"><div id="barraProgressoUpload" class="upload-bar-fill"></div></div>
+                            </div>
+                            <button id="btnEnviar" class="btn-primary-dashboard big" disabled>SELECIONE UM ARQUIVO</button>
+                        </div>
+                        <div class="cc-file-section internal-storage">
+                            <h3>Memória Interna (Klipper)</h3>
+                            <ul id="listaArquivosInternos" class="internal-file-list">
+                                <li class="loading-state">Lendo memória...</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div> </div>
+    </div>
+
+    <script>
+        let impressoraSelecionada = '';
+        let pastaAtual = '';
+        let uploadsAtivos = {};
+        let isPollingPaused = false;
+        let pollingDeep = null;
+
+        // 1. MONITORAMENTO GERAL (Grid e Widgets)
+        function atualizarStatusInstantaneo() {
+            if (isPollingPaused) return;
+            fetch('/status_atualizado').then(r => r.json()).then(data => {
+                document.getElementById('countDisp').innerText = data.total_disponiveis;
+                const listaAtiva = document.getElementById('listaProducaoAtiva');
+                let htmlLista = '';
+                let temAlguemImprimindo = false;
 
                 Object.entries(data.impressoras).forEach(([ip, dados]) => {
-                    const card = document.querySelector(`.card[onclick*="${ip}"]`);
-                    if (!card) return;
-
-                    card.className = `card ${dados.cor}`;
-                    const dot = card.querySelector('.status-dot');
-                    if(dot) dot.className = `status-dot ${dados.status === 'printing' ? 'printing' : ''}`;
-                    
-                    const statusTxt = card.querySelector('.status-text');
-                    if(statusTxt) statusTxt.innerText = dados.msg;
-
-                    const infoDiv = card.querySelector('.info-impressao');
-                    if (['printing', 'paused'].includes(dados.status)) {
-                        infoDiv.style.display = 'block';
-                        card.querySelector('.barra-progresso').style.width = dados.progresso + '%';
-                    } else {
-                        infoDiv.style.display = 'none';
+                    const card = document.querySelector(`.card-pro[onclick*="${ip}"]`);
+                    if (card) {
+                        card.className = `card-pro ${dados.cor}`;
+                        const statusTxt = card.querySelector('.status-text');
+                        if(statusTxt) statusTxt.innerText = dados.msg;
+                        const infoDiv = card.querySelector('.progress-area');
+                        if (['printing', 'paused'].includes(dados.status)) {
+                            infoDiv.style.display = 'block';
+                            card.querySelector('.barra-progresso').style.width = dados.progresso + '%';
+                            card.querySelector('.pct-val').innerText = dados.progresso + '%';
+                            temAlguemImprimindo = true;
+                            const nomeLimpo = dados.arquivo.replace('.gcode', '').replace('.bgcode', '');
+                            htmlLista += `<li><span class="printer-name">${dados.nome}</span><span class="file-name">${nomeLimpo}</span></li>`;
+                        } else { infoDiv.style.display = 'none'; }
                     }
                 });
-            }).catch(err => console.error("Erro na telemetria:", err));
-    }
-    setInterval(atualizarStatusInstantaneo, 2000);
-
-    // --- 2. Gestão do Modal e Navegação (Original) ---
-    function abrirModal(ip, nome) {
-        impressoraSelecionada = ip;
-        document.getElementById('modalImprimir').style.display = "flex";
-        document.getElementById('tituloModal').innerText = `Comandar: ${nome}`;
-        document.querySelector('.close-btn').style.visibility = 'visible';
-        document.querySelector('.file-explorer-container').style.display = 'block';
-        document.getElementById('containerProgresso').style.display = 'none';
-        document.getElementById('btnEnviar').style.display = 'block';
-        document.getElementById('fullScreenSuccess').classList.remove('show');
-        pastaAtual = '';
-        carregarPasta(''); 
-        resetBotaoEnviar();
-    }
-
-    function carregarPasta(caminho) {
-        const ul = document.getElementById('listaGcodes');
-        ul.innerHTML = '<li class="loading-msg">Consultando...</li>';
-        fetch('/navegar', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ pasta: caminho })
-        }).then(r => r.json()).then(dados => {
-            pastaAtual = dados.atual;
-            renderizarArquivos(dados);
-        });
-    }
-
-    function renderizarArquivos(dados) {
-        const ul = document.getElementById('listaGcodes');
-        ul.innerHTML = ''; 
-        document.getElementById('caminhoAtual').innerText = dados.atual || 'Raiz (gcodes)';
-        document.getElementById('btnVoltar').disabled = (dados.atual === '');
-        dados.pastas.forEach(p => {
-            const li = document.createElement('li');
-            li.className = 'item-pasta';
-            li.innerHTML = `<span>📁</span> <strong>${p}</strong>`;
-            li.onclick = () => carregarPasta(pastaAtual + (pastaAtual ? '\\' : '') + p);
-            ul.appendChild(li);
-        });
-        dados.arquivos.forEach(arq => {
-            const li = document.createElement('li');
-            li.className = 'item-arquivo';
-            li.innerHTML = `<span>📄</span> ${arq}`;
-            li.onclick = () => selecionarArquivo(li, arq);
-            ul.appendChild(li);
-        });
-    }
-
-    function selecionarArquivo(elemento, nomeArquivo) {
-        document.querySelectorAll('#listaGcodes li').forEach(i => i.classList.remove('selecionado'));
-        elemento.classList.add('selecionado');
-        const btn = document.getElementById('btnEnviar');
-        btn.disabled = false;
-        btn.classList.add('active');
-        btn.dataset.arquivo = pastaAtual + (pastaAtual ? '\\' : '') + nomeArquivo; 
-        btn.innerText = `IMPRIMIR AGORA`;
-    }
-
-    function voltarPasta() {
-        const partes = pastaAtual.split('\\');
-        partes.pop();
-        carregarPasta(partes.join('\\'));
-    }
-
-    function resetBotaoEnviar() {
-        const btn = document.getElementById('btnEnviar');
-        btn.disabled = true;
-        btn.classList.remove('active');
-        btn.innerText = "SELECIONE UM ARQUIVO";
-    }
-
-    // --- 3. Execução de Envio com Foco Total ---
-    // --- 3. Execução de Envio com Foco Total ---
-    document.getElementById('btnEnviar').onclick = function() {
-        const arquivo = this.dataset.arquivo;
-        const ip = impressoraSelecionada;
-        // 🚀 Ajuste: Garantimos que o ID do JS bata com o do HTML
-        const idLimpo = ip.split('.').join('-'); 
-        const nomeImpressora = document.getElementById('tituloModal').innerText.replace('Comandar: ', '');
-        
-        if(!confirm(`Iniciar impressão de: ${arquivo}?`)) return;
-
-        // 🚀 Opcional: Pausa a telemetria global se desejar foco total no upload
-        // isPollingPaused = true; 
-
-        fecharModal();
-
-        const loader = document.getElementById(`loader-${idLimpo}`);
-        const content = document.getElementById(`content-${idLimpo}`);
-        const success = document.getElementById(`success-${idLimpo}`);
-        
-        if(loader) {
-            loader.style.display = 'flex';
-            content.style.display = 'block';
-            success.style.display = 'none';
-        }
-
-        fetch('/imprimir', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ ip: ip, arquivo: arquivo })
-        });
-
-        uploadsAtivos[ip] = setInterval(() => {
-            fetch(`/progresso_transmissao/${ip}`)
-            .then(r => r.json())
-            .then(d => {
-                let p = d.p; 
-                
-                // Atualiza elementos internos do card
-                const fill = document.getElementById(`fill-${idLimpo}`);
-                const pct = document.getElementById(`pct-${idLimpo}`);
-                const msg = document.getElementById(`msg-${idLimpo}`);
-
-                if(fill) fill.style.width = p + '%';
-                if(pct) pct.innerText = p + '%';
-                if(msg) msg.innerText = d.msg;
-
-                if(p >= 100) {
-                    clearInterval(uploadsAtivos[ip]);
-                    delete uploadsAtivos[ip];
-
-                    if(content) content.style.display = 'none';
-                    if(success) success.style.display = 'flex';
-
-                    setTimeout(() => {
-                        if(loader) loader.style.display = 'none';
-                        // isPollingPaused = false; // Retoma se tiver pausado
-                        atualizarStatusInstantaneo(); 
-                    }, 4000);
-                }
-            })
-            .catch(err => {
-                console.error(`Erro no upload para ${ip}:`, err);
-                clearInterval(uploadsAtivos[ip]);
-                if(loader) loader.style.display = 'none';
-                // isPollingPaused = false;
+                listaAtiva.innerHTML = temAlguemImprimindo ? htmlLista : '<li class="empty-msg">Nenhuma colmeia em produção</li>';
             });
-        }, 600);
-    };
 
-    function fecharModal() {
-        // Removemos a trava do pollingUpload para permitir multitarefa
-        document.getElementById('modalImprimir').style.display = "none";
+            fetch('/dados_producao_diaria').then(r => r.json()).then(producao => {
+                const listaConcluida = document.getElementById('listaProducaoConcluida');
+                let htmlConcluido = '';
+                Object.entries(producao.itens).forEach(([nome, qtd]) => {
+                    htmlConcluido += `<li><span class="printer-name">${nome}</span><span class="file-name">Qtd: ${qtd}</span></li>`;
+                });
+                listaConcluida.innerHTML = htmlConcluido || '<li class="empty-msg">Aguardando finalizações...</li>';
+            });
+        }
+
+        // 2. LOGICA DO COMMAND CENTER
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            event.target.classList.add('active');
+            document.getElementById(`tab-${tabId}`).classList.add('active');
+        }
+
+        function deepPollingCC() {
+    if (!impressoraSelecionada) return;
+    fetch(`/api/detalhes_profundos/${impressoraSelecionada}`)
+        .then(r => r.json())
+        .then(data => {
+            // 🛡️ Validação: Só tenta atualizar se os dados existirem na resposta
+            if (data.status && data.status.extruder && data.status.heater_bed) {
+                document.getElementById('temp-ext-cur').innerText = Math.round(data.status.extruder.temperature) || 0;
+                document.getElementById('temp-ext-tar').innerText = Math.round(data.status.extruder.target) || 0;
+                document.getElementById('temp-bed-cur').innerText = Math.round(data.status.heater_bed.temperature) || 0;
+                document.getElementById('temp-bed-tar').innerText = Math.round(data.status.heater_bed.target) || 0;
+            }
+
+            // Atualiza Console
+            const log = document.getElementById('cc-console-log');
+            if (data.console && log) {
+                log.innerHTML = data.console.map(line => `<div class="console-line"><span>></span> ${line.message}</div>`).join('');
+                log.scrollTop = log.scrollHeight; // Auto-scroll para o final
+            }
+        }).catch(err => console.error("Erro no Deep Polling:", err));
+}
+
+        function abrirModal(ip, nome) {
+            impressoraSelecionada = ip;
+            document.getElementById('modalImprimir').style.display = "flex";
+            document.getElementById('tituloModal').innerText = nome;
+            document.getElementById('cc-ip-badge').innerText = ip;
+            document.getElementById('fullScreenSuccess').classList.remove('show');
+            
+            switchTab('monitor');
+            carregarPasta(''); 
+            carregarArquivosInternos(); 
+            pollingDeep = setInterval(deepPollingCC, 2000);
+        }
+
+        function fecharModal() {
+            document.getElementById('modalImprimir').style.display = "none";
+            clearInterval(pollingDeep);
+            impressoraSelecionada = '';
+        }
+
+        // 3. LOGICA DE ARQUIVOS (INTERNOS E EXTERNOS)
+        function carregarPasta(caminho) {
+            fetch('/navegar', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ pasta: caminho })
+            }).then(r => r.json()).then(dados => {
+                pastaAtual = dados.atual;
+                const ul = document.getElementById('listaGcodes');
+                ul.innerHTML = '';
+                document.getElementById('caminhoAtual').innerText = dados.atual || 'Raiz';
+                document.getElementById('btnVoltar').disabled = (dados.atual === '');
+                
+                dados.pastas.forEach(p => {
+                    const li = document.createElement('li');
+                    li.className = 'item-folder';
+                    li.innerHTML = `📁 ${p}`;
+                    li.onclick = () => carregarPasta(pastaAtual + (pastaAtual ? '\\' : '') + p);
+                    ul.appendChild(li);
+                });
+                dados.arquivos.forEach(arq => {
+                    const li = document.createElement('li');
+                    li.className = 'item-file';
+                    li.innerHTML = `📄 ${arq}`;
+                    li.onclick = () => selecionarArquivo(li, arq);
+                    ul.appendChild(li);
+                });
+            });
+        }
+
+        function selecionarArquivo(el, nome) {
+            document.querySelectorAll('.item-file').forEach(i => i.classList.remove('selected'));
+            el.classList.add('selected');
+            const btn = document.getElementById('btnEnviar');
+            btn.disabled = false;
+            btn.dataset.arquivo = pastaAtual + (pastaAtual ? '\\' : '') + nome;
+            btn.innerText = "INICIAR PRODUÇÃO";
+        }
+
+        function carregarArquivosInternos() {
+            const lista = document.getElementById('listaArquivosInternos');
+            fetch(`/api/arquivos_internos/${impressoraSelecionada}`).then(r => r.json()).then(arquivos => {
+                lista.innerHTML = arquivos.map(f => `
+                    <li class="internal-file-item">
+                        <div><strong>${f.filename}</strong><br><small>${(f.size/1024/1024).toFixed(1)}MB</small></div>
+                        <button onclick="enviarComandoCC('START_PRINT', '${f.filename}')">IMPRIMIR</button>
+                    </li>
+                `).join('');
+            });
+        }
+
+        // 4. ENVIO E COMANDOS
+        document.getElementById('btnEnviar').onclick = function() {
+            const arquivo = this.dataset.arquivo;
+            const ip = impressoraSelecionada;
+            const idLimpo = ip.split('.').join('-');
+            fecharModal();
+            
+            document.getElementById(`loader-${idLimpo}`).style.display = 'flex';
+            fetch('/imprimir', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ ip: ip, arquivo: arquivo })
+            });
+
+            uploadsAtivos[ip] = setInterval(() => {
+                fetch(`/progresso_transmissao/${ip}`).then(r => r.json()).then(d => {
+                    document.getElementById(`fill-${idLimpo}`).style.width = d.p + '%';
+                    document.getElementById(`pct-${idLimpo}`).innerText = d.p + '%';
+                    if(d.p >= 100) {
+                        clearInterval(uploadsAtivos[ip]);
+                        document.getElementById(`content-${idLimpo}`).style.display = 'none';
+                        document.getElementById(`success-${idLimpo}`).style.display = 'flex';
+                        setTimeout(() => { document.getElementById(`loader-${idLimpo}`).style.display = 'none'; }, 3000);
+                    }
+                });
+            }, 800);
+        };
+
+        function enviarComandoCC(cmd, params = '') {
+            fetch('/api/comando_gcode', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ ip: impressoraSelecionada, comando: cmd, extra: params })
+            });
+        }
+
+        function toggleStatusDrawer() {
+            const drawer = document.querySelector('.summary-widgets');
+            drawer.classList.toggle('drawer-open');
+            document.getElementById('statusOverlay').classList.toggle('active');
+        }
+
+        setInterval(atualizarStatusInstantaneo, 3000);
+
+        // 1. Configuração de Temperatura Interativa
+function configurarTemperatura(tipo) {
+    const statusAtual = document.querySelector(`.card-pro[onclick*="${impressoraSelecionada}"]`).className;
+    
+    // 🛡️ Segurança: Bloqueia se estiver imprimindo
+    if (statusAtual.includes('printing')) {
+        alert("⚠️ Operação bloqueada! Não é possível alterar a temperatura durante a impressão.");
+        return;
     }
 
-    window.onclick = e => { 
-        if (e.target.id === 'modalImprimir') {
-            if (!pollingUpload) fecharModal(); 
-            else {
-                const win = document.querySelector('.modal-window');
-                win.style.border = '2px solid #ff9800';
-                setTimeout(() => win.style.border = '1px solid #444', 300);
-            }
-        }
-    };
-</script>
+    const valor = prompt(`Definir temperatura para ${tipo === 'extruder' ? 'Bico' : 'Mesa'} (°C):`);
+    if (valor && !isNaN(valor)) {
+        const cmd = tipo === 'extruder' ? `M104 S${valor}` : `M140 S${valor}`;
+        enviarComandoCC(cmd);
+    }
+}
+
+// 2. Lógica de Movimentação Relativa
+function moverImpressora(eixo, distancia) {
+    // 🛡️ Segurança: Impede movimentação manual em produção
+    const statusAtivo = document.querySelector(`.card-pro[onclick*="${impressoraSelecionada}"]`).className;
+    if (statusAtivo.includes('printing')) return;
+
+    // Envia sequência: Modo Relativo -> Mover -> Modo Absoluto (Segurança)
+    const gcode = `G91\nG1 ${eixo}${distancia} F3000\nG90`;
+    enviarComandoCC(gcode);
+}
+    </script>
 </body>
 </html>
