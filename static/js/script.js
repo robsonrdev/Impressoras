@@ -145,6 +145,60 @@ function confirmarExclusaoImpressora() {
     }
 }
 
+function imprimirArquivoBiblioteca(arquivoRelativo){
+  if (!impressoraSelecionada) {
+    alert("Selecione uma impressora primeiro.");
+    return;
+  }
+
+  fetch('/imprimir', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ ip: impressoraSelecionada, arquivo: arquivoRelativo })
+  })
+  .then(async r => {
+    const text = await r.text();
+    let json; try { json = JSON.parse(text); } catch { json = null; }
+    if (!r.ok) throw new Error(json?.message || text || `HTTP ${r.status}`);
+    return json;
+  })
+  .then(res => {
+    alert("✅ Enviado para fila!");
+    fecharModal();
+  })
+  .catch(err => alert("❌ Erro: " + err.message));
+}
+
+function imprimirArquivoInterno(filename){
+  if (!impressoraSelecionada) {
+    alert("Selecione uma impressora primeiro.");
+    return;
+  }
+
+  fetch('/api/imprimir_interno', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ ip: impressoraSelecionada, filename })
+  })
+  .then(async r => {
+    const text = await r.text();
+    let json; try { json = JSON.parse(text); } catch { json = null; }
+    if (!r.ok) throw new Error(json?.message || text || `HTTP ${r.status}`);
+    return json;
+  })
+  .then(res => {
+    if (res.success) {
+      alert("✅ Impressão iniciada (arquivo interno)!");
+      fecharModal();
+    } else {
+      alert("❌ " + (res.message || "Erro"));
+    }
+  })
+  .catch(err => alert("❌ Erro: " + err.message));
+}
+
+
+
 /** Remove impressora no backend */
 function removerImpressora(ip, nome) {
     fetch('/remover_impressora', {
@@ -260,45 +314,108 @@ function fecharModal() {
    3) ARQUIVOS (BIBLIOTECA CENTRAL / NAVEGAÇÃO / SELEÇÃO)
 ========================================================= */
 function carregarPasta(caminho) {
-    fetch('/navegar', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ pasta: caminho })
-    })
-    .then(r => r.json())
-    .then(dados => {
-        pastaAtual = dados.atual;
+  fetch('/navegar', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pasta: caminho })
+  })
+  .then(r => r.json())
+  .then(dados => {
+    pastaAtual = dados.atual || '';
 
-        const ul = document.getElementById('listaGcodes');
-        if (!ul) return;
+    const ul = document.getElementById('listaGcodes');
+    if (!ul) return;
 
-        ul.innerHTML = '';
+    ul.innerHTML = '';
 
-        const caminhoEl = document.getElementById('caminhoAtual');
-        if (caminhoEl) caminhoEl.innerText = dados.atual || 'Raiz';
+    const caminhoEl = document.getElementById('caminhoAtual');
+    if (caminhoEl) caminhoEl.innerText = pastaAtual || 'Raiz';
 
-        const btnVoltar = document.getElementById('btnVoltar');
-        if (btnVoltar) btnVoltar.disabled = (dados.atual === '');
+    const btnVoltar = document.getElementById('btnVoltar');
+    if (btnVoltar) btnVoltar.disabled = (pastaAtual === '');
 
-        // Pastas
-        (dados.pastas || []).forEach(p => {
-            const li = document.createElement('li');
-            li.className = 'item-folder';
-            li.innerHTML = `📁 ${p}`;
-            li.onclick = () => carregarPasta(pastaAtual + (pastaAtual ? '\\' : '') + p);
-            ul.appendChild(li);
-        });
+    // ============================
+    // Pastas (clicável)
+    // ============================
+    (dados.pastas || []).forEach(p => {
+      const li = document.createElement('li');
+      li.className = 'internal-file-item';
 
-        // Arquivos
-        (dados.arquivos || []).forEach(arq => {
-            const li = document.createElement('li');
-            li.className = 'item-file';
-            li.innerHTML = `📄 ${arq}`;
-            li.onclick = () => selecionarArquivo(li, arq);
-            ul.appendChild(li);
-        });
+      li.innerHTML = `
+        <div class="file-info">
+          <strong class="file-name-text">📁 ${p}</strong>
+          <small class="file-size-tag">Pasta</small>
+        </div>
+        <button class="btn-print-internal" type="button">ABRIR</button>
+      `;
+
+      li.querySelector('button').onclick = () => {
+        const next = pastaAtual ? `${pastaAtual}/${p}` : p;
+        carregarPasta(next);
+      };
+
+      ul.appendChild(li);
     });
+
+    // ============================
+    // Arquivos (qualquer extensão)
+    // ============================
+    (dados.arquivos || []).forEach(arqObj => {
+      // compat: se backend ainda manda string, trata como string
+      const nomeArquivo = (typeof arqObj === 'string') ? arqObj : (arqObj.nome || arqObj.name || '');
+      const tamanhoBytes = (typeof arqObj === 'object') ? (arqObj.tamanho_bytes || arqObj.size || null) : null;
+
+      if (!nomeArquivo) return;
+
+      const arqLower = nomeArquivo.toLowerCase();
+      const isGcode = arqLower.endsWith('.gcode') || arqLower.endsWith('.bgcode');
+
+      const rel = pastaAtual ? `${pastaAtual}/${nomeArquivo}` : nomeArquivo;
+
+      // tag de tamanho (se vier do backend)
+      let tagInfo = 'Biblioteca';
+      if (tamanhoBytes && !isNaN(tamanhoBytes)) {
+        const mb = (tamanhoBytes / 1024 / 1024).toFixed(1);
+        tagInfo = `${mb} MB`;
+      }
+
+      const li = document.createElement('li');
+      li.className = 'internal-file-item';
+
+      li.innerHTML = `
+        <div class="file-info">
+          <strong class="file-name-text">${nomeArquivo}</strong>
+          <small class="file-size-tag">${tagInfo}</small>
+        </div>
+        <button class="btn-print-internal" type="button">
+          ${isGcode ? 'IMPRIMIR' : 'NÃO IMPRIMÍVEL'}
+        </button>
+      `;
+
+      const btn = li.querySelector('button');
+      btn.disabled = !isGcode;
+      btn.style.opacity = isGcode ? '1' : '0.45';
+      btn.style.cursor = isGcode ? 'pointer' : 'not-allowed';
+
+      btn.onclick = () => {
+        if (!isGcode) return;
+        imprimirArquivoBiblioteca(rel);
+      };
+
+      ul.appendChild(li);
+    });
+
+    if ((dados.pastas || []).length === 0 && (dados.arquivos || []).length === 0) {
+      ul.innerHTML = `<li class="empty-msg">Nenhum arquivo encontrado nesta pasta.</li>`;
+    }
+  })
+  .catch(err => {
+    console.error("Erro ao carregar pasta:", err);
+    const ul = document.getElementById('listaGcodes');
+    if (ul) ul.innerHTML = `<li class="error-msg">Erro ao abrir biblioteca.</li>`;
+  });
 }
+
 
 function selecionarArquivo(el, nome) {
     document.querySelectorAll('.item-file').forEach(i => i.classList.remove('selected'));
@@ -350,9 +467,10 @@ function carregarArquivosInternos() {
                             <small class="file-size-tag">${tamanhoMB} MB</small>
                         </div>
                         <button class="btn-print-internal"
-                                onclick="enviarComandoCC('SDCARD_PRINT_FILE', 'FILENAME=${nomeArquivo}')">
-                            IMPRIMIR
-                        </button>
+                             onclick="imprimirArquivoInterno('${nomeArquivo.replace(/'/g, "\\'")}')">
+                         IMPRIMIR
+                    </button>
+
                     </li>
                 `;
             }).join('');
@@ -914,17 +1032,26 @@ function executarAcaoMassa(){
     if (!confirm(`Enviar "${arquivo}" para ${ips.length} impressoras?`)) return;
 
     fetch('/imprimir_em_massa', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ ips, arquivo })
-    })
-    .then(r => r.json())
-    .then(res => {
-      if (res.success) alert("✅ Ação em massa disparada!");
-      else alert("❌ Falha: " + (res.message || "erro"));
-      fecharModalMassa();
-    })
-    .catch(err => alert("🚨 Erro de rede: " + err));
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({ ips, arquivo })
+})
+.then(async r => {
+  const text = await r.text();
+  let json;
+  try { json = JSON.parse(text); } catch { json = null; }
+
+  if (!r.ok) {
+    throw new Error(json?.message || text || `HTTP ${r.status}`);
+  }
+  return json;
+})
+.then(res => {
+  alert(`✅ Enfileirado para ${res.total || ips.length} impressoras!`);
+  fecharModalMassa();
+})
+.catch(err => alert("❌ Falha no envio em massa: " + err.message));
+
 
     return;
   }

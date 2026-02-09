@@ -147,14 +147,15 @@ def carregar_tokens():
     if not os.path.exists(TOKENS_PATH):
         return {}
     try:
-        with open(TOKENS_PATH, "r", encoding="utf-8") as f:
+        with open(TOKENS_PATH, 'r') as f:
             return json.load(f)
     except:
         return {}
 
 def salvar_tokens(tokens):
-    with open(TOKENS_PATH, "w", encoding="utf-8") as f:
-        json.dump(tokens, f, indent=4, ensure_ascii=False)
+    with open(TOKENS_PATH, 'w') as f:
+        json.dump(tokens, f, indent=4)
+
 
 
 
@@ -269,27 +270,26 @@ def callback():
 @app.route('/api/estoque_bling')
 def pegar_estoque():
     try:
-        # 1. Garante que o token OAuth 2.0 esteja atualizado
         token = garantir_token_valido()
+
+        print("DEBUG /api/estoque_bling -> token (inicio):", token[:12], "...")  # não imprime tudo
         headers = {"Authorization": f"Bearer {token}"}
-        
-        # 2. Chamada para a API V3 (Filtro 'estoque=S' traz os saldos)
+
         url = "https://www.bling.com.br/Api/v3/produtos?estoque=S"
-        response = SESSAO_REDE.get(url, headers=headers, timeout=10)
-        
-        # 3. Verifica se a API do Bling respondeu com sucesso (Status 200)
+        response = requests.get(url, headers=headers, timeout=10)
+
+        print("DEBUG /api/estoque_bling -> status:", response.status_code)
+        print("DEBUG /api/estoque_bling -> body:", response.text[:300])
+
         if response.status_code == 200:
-            dados = response.json()
-            # Retorna apenas o JSON para o front-end, sem salvar arquivos no disco
-            return jsonify(dados)
+            return jsonify(response.json())
         else:
-            print(f"⚠️ Erro na API Bling: Status {response.status_code}")
             return jsonify({"error": "Erro na comunicação com o Bling", "details": response.text}), response.status_code
 
     except Exception as e:
-        # Log de erro para o terminal do VS Code em Betim
-        print(f"🚨 Falha crítica no módulo de estoque: {str(e)}")
+        print("DEBUG /api/estoque_bling -> exception:", str(e))
         return jsonify({"error": str(e)}), 500
+
 
 @app.route('/api/adicionar_estoque', methods=['POST'])
 def adicionar_estoque():
@@ -444,6 +444,45 @@ def verificar_ip(ip, nome_personalizado):
             }
     except Exception as e:
         print(f"Erro ao monitorar {ip}: {e}")
+
+
+@app.route('/api/imprimir_interno', methods=['POST'])
+def imprimir_interno():
+    dados = request.json or {}
+    ip = dados.get('ip')
+    filename = (dados.get('filename') or '').strip()
+
+    if not ip or not filename:
+        return jsonify({"success": False, "message": "ip/filename ausentes"}), 400
+
+    try:
+        nome_url = urllib.parse.quote(filename)
+        url = f"http://{ip}/printer/print/start?filename={nome_url}"
+        SESSAO_REDE.post(url, timeout=10)
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@app.route('/api/imprimir_biblioteca', methods=['POST'])
+def imprimir_biblioteca():
+    dados = request.json or {}
+    ip = dados.get('ip')
+    arquivo = (dados.get('arquivo') or '').strip()
+
+    if not ip or not arquivo:
+        return jsonify({"success": False, "message": "ip/arquivo ausentes"}), 400
+
+    # garante separador linux/web
+    arquivo = arquivo.replace("\\", "/").lstrip("/")
+
+    caminho = os.path.abspath(os.path.join(PASTA_RAIZ, arquivo))
+    if not os.path.exists(caminho):
+        return jsonify({"success": False, "message": f"Arquivo não encontrado: {arquivo}"}), 404
+
+    enfileirar_impressao(ip, caminho, arquivo_label=os.path.basename(caminho))
+    return jsonify({"success": True, "queued": True})
+
 
 def monitor_inteligente():
     """Monitora as máquinas respeitando a ordem do arquivo"""
@@ -617,15 +656,43 @@ def progresso_transmissao(ip):
 
 @app.route('/navegar', methods=['POST'])
 def navegar():
-    dados = request.json
-    subpasta = dados.get('pasta', '').strip('\\/')
+    dados = request.json or {}
+    subpasta = (dados.get('pasta') or '').strip().replace('\\', '/').strip('/')
+
+    # monta caminho alvo
     caminho_alvo = os.path.abspath(os.path.join(PASTA_RAIZ, subpasta))
-    itens = os.listdir(caminho_alvo)
+
+    # segurança: impede escapar do diretório raiz
+    raiz_abs = os.path.abspath(PASTA_RAIZ)
+    if not caminho_alvo.startswith(raiz_abs):
+        return jsonify({"error": "Caminho inválido"}), 400
+
+    try:
+        itens = os.listdir(caminho_alvo)
+    except Exception as e:
+        return jsonify({"error": f"Não foi possível listar: {str(e)}"}), 500
+
+    # opcional: ignora lixo comum
+    ignorar = {'.DS_Store', 'Thumbs.db'}
+
+    pastas = []
+    arquivos = []
+
+    for nome in itens:
+        if nome in ignorar or nome.startswith('.'):
+            continue
+        full = os.path.join(caminho_alvo, nome)
+        if os.path.isdir(full):
+            pastas.append(nome)
+        else:
+            arquivos.append(nome)  # <- qualquer arquivo, qualquer extensão
+
     return jsonify({
         "atual": subpasta,
-        "pastas": sorted([f for f in itens if os.path.isdir(os.path.join(caminho_alvo, f))]),
-        "arquivos": sorted([f for f in itens if f.endswith(('.gcode', '.bgcode'))])
+        "pastas": sorted(pastas),
+        "arquivos": sorted(arquivos)
     })
+
 
 @app.route('/remover_impressora', methods=['POST'])
 def remover_impressora():
