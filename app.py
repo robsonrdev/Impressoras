@@ -19,6 +19,11 @@ app = Flask(__name__)
 PASTA_RAIZ = os.path.abspath(r'/app/gcodes') 
 ARQUIVO_BANCO = 'impressores.json' 
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+os.makedirs(BASE_DIR, exist_ok=True)
+TOKENS_PATH = os.path.join(BASE_DIR, "tokens.json")
+
+
 UPLOAD_FILAS = {}          # ip -> Queue()
 UPLOAD_WORKERS = {}        # ip -> Thread
 UPLOAD_LOCK = threading.Lock()
@@ -139,24 +144,28 @@ def testar_conexao_rapida(ip, porta=80):
 
 # 1. Funções de Persistência de Tokens
 def carregar_tokens():
-    """Lê os tokens do disco com fallback para dicionário vazio"""
-    if not os.path.exists('tokens.json'):
+    if not os.path.exists(TOKENS_PATH):
         return {}
     try:
-        with open('tokens.json', 'r') as f:
+        with open(TOKENS_PATH, "r", encoding="utf-8") as f:
             return json.load(f)
     except:
         return {}
 
 def salvar_tokens(tokens):
-    """Salva os tokens para que todos os dispositivos usem a mesma sessão"""
-    with open('tokens.json', 'w') as f:
-        json.dump(tokens, f, indent=4)
+    with open(TOKENS_PATH, "w", encoding="utf-8") as f:
+        json.dump(tokens, f, indent=4, ensure_ascii=False)
+
+
 
 # 2. Lógica de Renovação Automática (OAuth 2.0)
 def garantir_token_valido():
+
+    print("TOKENS_PATH =", TOKENS_PATH)
+    print("EXISTE tokens?", os.path.exists(TOKENS_PATH))
     """Garante que qualquer dispositivo sempre tenha um token funcional"""
     tokens = carregar_tokens()
+    print("TOKENS carregados keys:", list(tokens.keys()) if tokens else "VAZIO")
     if not tokens:
         raise Exception("Nenhum token encontrado. Acesse /login_bling primeiro.")
 
@@ -266,7 +275,7 @@ def pegar_estoque():
         
         # 2. Chamada para a API V3 (Filtro 'estoque=S' traz os saldos)
         url = "https://www.bling.com.br/Api/v3/produtos?estoque=S"
-        response = requests.get(url, headers=headers, timeout=10)
+        response = SESSAO_REDE.get(url, headers=headers, timeout=10)
         
         # 3. Verifica se a API do Bling respondeu com sucesso (Status 200)
         if response.status_code == 200:
