@@ -755,86 +755,7 @@ body {
    8. Responsividade Dashboard (Tablet & Mobile)
    ========================================================================== */
 
-/* --- TABLETS (Até 1024px) --- */
-@media (max-width: 1024px) {
-    .sidebar {
-        width: 80px; /* Sidebar compacta, apenas com ícones */
-        padding: 20px 10px;
-    }
-    
-    .brand-text, .nav-item span:not(.icon), .btn-new-printer span:not(.plus-icon) {
-        display: none; /* Esconde textos para ganhar espaço */
-    }
 
-    .summary-widgets {
-        grid-template-columns: 1fr 1fr; /* 2 colunas para widgets */
-    }
-
-    .main-viewport {
-        padding: 20px;
-    }
-}
-
-/* --- CELULARES (Até 768px) --- */
-@media (max-width: 768px) {
-    .app-layout {
-        flex-direction: column; /* Sidebar vai para o topo ou some */
-    }
-
-    .sidebar {
-        width: 100%;
-        height: auto;
-        flex-direction: row;
-        justify-content: space-between;
-        padding: 15px 20px;
-        position: sticky;
-        top: 0;
-        z-index: 3000;
-    }
-
-    .sidebar-nav {
-        display: none; /* Esconde a navegação no celular para focar no grid */
-    }
-
-    .sidebar-brand { margin-bottom: 0; }
-
-    .top-bar {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 15px;
-        margin-top: 20px;
-    }
-
-    .search-box { width: 100%; }
-    .search-box input { width: 100%; }
-
-    .summary-widgets {
-        grid-template-columns: 1fr; /* Widgets em coluna única no celular */
-    }
-
-    .grid-responsive {
-        grid-template-columns: 1fr; /* Um card por linha para leitura fácil */
-    }
-
-    .welcome-text h1 { font-size: 1.5rem; }
-
-    /* Ajuste de Modais para Touch */
-    .dashboard-modal {
-        width: 95%;
-        max-height: 90vh;
-        z-index: 5000;
-        margin: auto;
-    }
-    .top-btn {
-    padding: 10px 20px !important;
-    font-size: 0.8rem !important;
-    white-space: nowrap;
-}
-
-    .btn-primary-dashboard.big {
-        padding: 22px; /* Área de clique maior para o polegar */
-    }
-}
 /* ==========================================================================
    9. Status Drawer PRO (Mobile/Tablet)
    ========================================================================== */
@@ -971,93 +892,217 @@ body {
     z-index: 2500;
 }
 
-/* --- REGRAS PARA TABLET E CELULAR --- */
-@media (max-width: 1024px) {
-    .status-toggler { display: flex; }
+/* ======================================================================
+   MENU HAMBURGUER (TABLET + CELULAR) — ÚNICO RESPONSIVO
+   ====================================================================== */
 
-    .summary-widgets {
-        position: fixed;
-        top: 0; 
-        right: -100%; /* Escondido fora da tela */
-        width: 320px;
-        height: 100vh;
-        background: var(--bg-glass);
-        backdrop-filter: blur(30px);
-        z-index: 3000;
-        padding: 80px 20px 30px 20px;
-        margin-bottom: 0;
-        display: flex;
-        flex-direction: column;
-        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-        border-left: 1px solid var(--border-glass);
-        box-shadow: -10px 0 30px rgba(0,0,0,0.5);
-    }
-
-    /* Estado Ativo: Gaveta Aberta */
-    .summary-widgets.drawer-open {
-        right: 0;
-    }
-
-    .status-drawer-overlay.active {
-        display: block;
-    }
-
-    /* Ajuste para os widgets caberem na vertical da gaveta */
-    .summary-widgets .widget-card {
-        width: 100%;
-        min-height: auto;
-    }
-}
-@media (max-width: 850px) {
-    .command-center-modal {
-        width: 100vw;
-        height: 100vh;
-        max-height: 100vh;
-        border-radius: 0;
-    }
-
-    .cc-grid {
-        grid-template-columns: 1fr; /* Empilha controles e console */
-        gap: 30px;
-    }
-
-    .console-log {
-        height: 250px; /* Reduz altura do terminal no celular */
-    }
-
-    /* Aumenta botões para o toque do dedo na oficina */
-    .jog-btn { width: 60px; height: 60px; }
-    .cc-files-layout { 
-        grid-template-columns: 1fr; /* Coloca uma lista embaixo da outra */
-    }
-    
-    .cc-file-section {
-        min-height: 400px; /* Garante tamanho para ver os arquivos */
-    }
+.hamburger-btn{
+  display:none;
+  background: var(--bg-glass);
+  border: 1px solid var(--border-glass);
+  color: var(--text-main);
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  font-size: 1.2rem;
+  cursor: pointer;
+  backdrop-filter: var(--glass-blur);
 }
 
-@media (max-width: 1024px) {
-    .app-layout { flex-direction: column; }
+.sidebar-overlay{
+  display:none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(4px);
+  z-index: 3999;
+}
+.sidebar-overlay.active{ display:block; }
 
-    .sidebar {
-        width: 100%; height: auto;
-        flex-direction: row; justify-content: space-between;
-        padding: 10px 20px;
-        position: sticky; top: 0;
-        z-index: 1000; /* Baixamos para o modal cobrir */
-    }
 
-    .command-center-modal {
-        /* No tablet, damos um pouco mais de margem lateral */
-        width: 95vw;
-        height: 88dvh; /* Um pouco menor para garantir que o rodapé apareça */
-    }
+/* ===========================
+   AÇÃO EM MASSA - TOOLBAR PRO (compacta)
+   RESPONSIVIDADE APENAS ATÉ 1024px
+=========================== */
+.mass-toolbar{
+  width: min(820px, 100%);
+  margin: 0 auto 14px auto;
+  padding: 8px 10px;
+  border-radius: 14px;
 
-    .brand-text, .nav-item span:not(.icon) { display: none; }
-    .sidebar-nav { display: none; } /* Esconde o menu lateral no tablet */
-    .status-toggler { display: flex; } /* Ativa o botão de Status Farm */
+  background: rgba(20, 20, 22, 0.55);
+  border: 1px solid var(--border-glass);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-soft);
 
-    .main-viewport { padding: 20px; }
-    .summary-widgets { grid-template-columns: 1fr; }
-    .grid-responsive { grid-template-columns: 1fr; }
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mass-toolbar .mass-title{
+  font-weight: 800;
+  font-size: 0.88rem;
+  letter-spacing: -0.2px;
+  color: var(--text-main);
+  opacity: 0.95;
+  white-space: nowrap;
+}
+
+.mass-toolbar .mass-actions{
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.mass-toolbar .mass-btn{
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.10);
+  color: var(--text-main);
+
+  padding: 8px 10px;
+  border-radius: 12px;
+  font-weight: 800;
+  font-size: 0.80rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+.mass-toolbar .mass-btn.primary{
+  background: var(--accent-orange);
+  color: var(--text-dark);
+  border: none;
+}
+
+.mass-toolbar .mass-btn:hover{
+  transform: translateY(-1px);
+  filter: brightness(1.08);
+}
+/* ===========================
+   CHECKBOX AÇÃO EM MASSA (SEM BRIGAR COM EMERGÊNCIA)
+   -> checkbox no canto ESQUERDO
+=========================== */
+.mass-check-wrap{
+  position: absolute;
+  top: 14px;
+  left: 14px;      /* ✅ agora fica à esquerda */
+  right: auto;
+  z-index: 55;     /* abaixo do botão de emergência se precisar */
+
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+
+  background: rgba(0,0,0,0.35);
+  border: 1px solid rgba(255,255,255,0.10);
+  backdrop-filter: blur(10px);
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mass-check{
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--accent-orange);
+}
+
+/* ✅ abre espaço pro checkbox não colidir com o status pill */
+.card-pro .status-pill{
+  margin-left: 44px;
+}
+
+/* ===========================
+   RESPONSIVO – SOMENTE ATÉ 1024px
+=========================== */
+@media (max-width: 1024px){
+
+  .hamburger-btn{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+  }
+
+  .app-layout{
+    flex-direction: column;
+  }
+
+  .sidebar{
+    pointer-events: none;
+  }
+
+  .sidebar.is-open{
+    pointer-events: auto;
+  }
+
+  .mass-toolbar{
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 14px;
+  }
+
+  .mass-toolbar .mass-title{
+    font-size: 0.9rem;
+  }
+
+   .mass-check-wrap{
+    top: 12px;
+    left: 12px;   /* ✅ esquerda também no mobile */
+    right: auto;
+    width: 34px;
+    height: 34px;
+    border-radius: 12px;
+  }
+
+  .mass-check{
+    width: 18px;
+    height: 18px;
+  }
+
+  /* Sidebar vira gaveta */
+  .sidebar{
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100dvh;
+    width: min(320px, 88vw);
+    z-index: 4000;
+
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+
+    background: var(--bg-glass);
+    backdrop-filter: var(--glass-blur);
+    border-right: 1px solid var(--border-glass);
+
+    transform: translateX(-105%);
+    transition: transform 0.28s cubic-bezier(0.2, 1, 0.2, 1);
+    will-change: transform;
+
+    display: flex;
+    flex-direction: column;
+    padding: 30px 20px;
+  }
+
+  .sidebar.is-open{
+    transform: translateX(0);
+  }
+
+  .sidebar-nav{
+    display: block !important;
+  }
+
+  .top-bar{
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .main-viewport{
+    padding: 20px;
+  }
 }

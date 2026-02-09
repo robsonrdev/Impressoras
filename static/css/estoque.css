@@ -1,0 +1,106 @@
+/* ============================================================
+   ESTOQUE PRO - LAYOUT HORIZONTAL ÚNICO (PC/TABLET/CELULAR) 
+   Baseado na aprovação:
+   ============================================================ */
+
+#secao-estoque {
+    width: 100% !important;
+    padding: 10px;
+    box-sizing: border-box;
+}
+
+.inventory-grid {
+    display: flex !important;
+    flex-direction: column !important; /* Lista de cima para baixo */
+    gap: 10px;
+    width: 100%;
+}
+
+/* 📦 O CARD: Sempre em linha, não importa o dispositivo */
+.product-card {
+    background: #111111;
+    border-radius: 18px;
+    padding: 12px 15px;
+    border: 1px solid #222;
+    display: flex !important;
+    flex-direction: row !important; /* FORÇA LADO A LADO NO CELULAR */
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+/* Imagem pequena para caber no celular sem quebrar a linha */
+.product-image {
+    width: 60px;
+    height: 60px;
+    border-radius: 10px;
+    object-fit: cover;
+    margin-right: 15px;
+    flex-shrink: 0; /* Impede a imagem de amassar */
+}
+
+/* Informações do Meio */
+.product-info {
+    flex-grow: 1;
+    min-width: 0; /* Permite que o texto encurte se necessário */
+}
+
+.product-info h3 {
+    color: #fff;
+    font-size: 0.95rem; /* Ajustado para telas menores */
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis; /* Corta o nome com "..." se for muito grande */
+}
+
+.sku-tag {
+    color: #555;
+    font-size: 0.65rem;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+/* Área de Estoque e Botão (Direita) */
+.stock-status {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    flex-shrink: 0;
+}
+
+.stock-count {
+    color: #ff8c00;
+    font-size: 2rem; /* Grande, mas cabe no celular */
+    font-weight: 800;
+    text-align: right;
+    min-width: 60px;
+}
+
+.stock-count span {
+    font-size: 0.8rem;
+    color: #444;
+}
+
+.btn-adjust {
+    background: #222;
+    color: #fff;
+    border: none;
+    padding: 8px 15px;
+    border-radius: 10px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+#secao-estoque {
+    position: relative;
+    z-index: 10;
+    min-height: 100vh;
+    background: #000; /* Fundo preto oficial de Betim */
+}
+
+/* Seção de estoque precisa estar visível quando ativa */
+#secao-estoque[style*="display: block"] {
+    display: block !important;
+}

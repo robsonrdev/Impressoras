@@ -4,9 +4,11 @@ import time
 import threading
 import requests
 import socket
+import re
 import time
 import urllib.parse
 import json
+from queue import Queue
 from flask import Flask, render_template, request, jsonify
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
@@ -16,6 +18,12 @@ app = Flask(__name__)
 # --- CONFIGURAÇÕES ---
 PASTA_RAIZ = os.path.abspath(r'/app/gcodes') 
 ARQUIVO_BANCO = 'impressores.json' 
+
+UPLOAD_FILAS = {}          # ip -> Queue()
+UPLOAD_WORKERS = {}        # ip -> Thread
+UPLOAD_LOCK = threading.Lock()
+MAX_UPLOADS_SIMULTANEOS = 1  # 1 = fila total (um upload por vez no sistema)
+UPLOAD_SEM = threading.Semaphore(MAX_UPLOADS_SIMULTANEOS)
 
 BLING_API_KEY = "seu_token_aqui"
 
@@ -45,28 +53,39 @@ SESSAO_REDE = requests.Session()
 SESSAO_REDE.headers.update({'Connection': 'keep-alive'})
 FALHAS_CONSECUTIVAS = {}
 
-# --- AUXILIARES DE PERSISTÊNCIA (IP + NOME) ---
+def chave_ordem_maquina(m):
+    """
+    Ordena por número no começo do nome.
+    Exemplos válidos: "1", "01", "1 - N4MAX", "10_Principal"
+    Quem não tiver número vai pro fim.
+    """
+    nome = str(m.get("nome", "")).strip()
+    match = re.match(r'^(\d+)', nome)
+    if match:
+        return int(match.group(1))
+    return 999999  # vai pro final
+
 def carregar_maquinas():
-    """Lê a lista de máquinas e mantém a ordem de cadastro"""
+    """Lê a lista de máquinas e retorna ORDENADA pelo número do nome"""
     if not os.path.exists(ARQUIVO_BANCO):
         return []
     try:
         with open(ARQUIVO_BANCO, 'r') as f:
-            return json.load(f) # Retorna [{"ip": "...", "nome": "..."}, ...]
+            maquinas = json.load(f)  # [{"ip": "...", "nome": "..."}, ...]
+            return sorted(maquinas, key=chave_ordem_maquina)
     except:
         return []
 
 def salvar_maquina(ip, nome):
-    """Adiciona nova máquina ao fim do arquivo para manter sua ordem"""
     maquinas = carregar_maquinas()
     if not any(m['ip'] == ip for m in maquinas):
         maquinas.append({"ip": ip, "nome": nome})
+        maquinas = sorted(maquinas, key=chave_ordem_maquina)
         with open(ARQUIVO_BANCO, 'w') as f:
             json.dump(maquinas, f, indent=4)
         return True
     return False
 
-# --- CLASSE MONITOR (Transmissão de GCODE) ---
 class Monitor:
     def __init__(self, file, ip_alvo):
         self.file = file
@@ -74,18 +93,33 @@ class Monitor:
         self.bytes_read = 0
         self.ip_alvo = ip_alvo
 
+        # controle de atualização (throttle)
+        self._last_update = 0.0
+        self._min_interval = 0.25  # 250 ms
+
     def read(self, size=-1):
+        # força leitura em blocos maiores (menos chamadas)
+        if size is None or size < 256 * 1024:
+            size = 256 * 1024  # 256 KB
+
         data = self.file.read(size)
         self.bytes_read += len(data)
-        if self.total > 0:
+
+        now = time.time()
+        if self.total > 0 and (now - self._last_update) >= self._min_interval:
+            self._last_update = now
+
             percent = int((self.bytes_read / self.total) * 90)
-            if self.ip_alvo in PROGRESSO_UPLOAD:
-                PROGRESSO_UPLOAD[self.ip_alvo]["p"] = percent
-                PROGRESSO_UPLOAD[self.ip_alvo]["msg"] = f"Transmitindo... ({percent}%)"
+            PROGRESSO_UPLOAD[self.ip_alvo] = {
+                "p": percent,
+                "msg": f"Transmitindo... ({percent}%)"
+            }
+
         return data
 
     def __getattr__(self, attr):
         return getattr(self.file, attr)
+
 
 # --- FUNÇÕES DE REDE E MONITORAMENTO ---
 def testar_conexao_rapida(ip, porta=80):
@@ -226,19 +260,26 @@ def callback():
 @app.route('/api/estoque_bling')
 def pegar_estoque():
     try:
-        # 1. Valida o token OAuth 2.0
+        # 1. Garante que o token OAuth 2.0 esteja atualizado
         token = garantir_token_valido()
         headers = {"Authorization": f"Bearer {token}"}
         
-        # 2. Faz a chamada real para o Bling V3 com estoque ativado
+        # 2. Chamada para a API V3 (Filtro 'estoque=S' traz os saldos)
         url = "https://www.bling.com.br/Api/v3/produtos?estoque=S"
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=10)
         
-        # 3. Retorna os dados diretamente para o Dashboard
-        return jsonify(response.json())
-        
+        # 3. Verifica se a API do Bling respondeu com sucesso (Status 200)
+        if response.status_code == 200:
+            dados = response.json()
+            # Retorna apenas o JSON para o front-end, sem salvar arquivos no disco
+            return jsonify(dados)
+        else:
+            print(f"⚠️ Erro na API Bling: Status {response.status_code}")
+            return jsonify({"error": "Erro na comunicação com o Bling", "details": response.text}), response.status_code
+
     except Exception as e:
-        print(f"🚨 Erro na integração Bling em Betim: {e}")
+        # Log de erro para o terminal do VS Code em Betim
+        print(f"🚨 Falha crítica no módulo de estoque: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/adicionar_estoque', methods=['POST'])
@@ -407,27 +448,97 @@ def monitor_inteligente():
 
 threading.Thread(target=monitor_inteligente, daemon=True).start()
 
+
+"""Fila de impressão """
+def garantir_fila(ip):
+    with UPLOAD_LOCK:
+        if ip not in UPLOAD_FILAS:
+            UPLOAD_FILAS[ip] = Queue()
+        if ip not in UPLOAD_WORKERS or not UPLOAD_WORKERS[ip].is_alive():
+            t = threading.Thread(target=worker_upload, args=(ip,), daemon=True)
+            UPLOAD_WORKERS[ip] = t
+            t.start()
+
+def worker_upload(ip):
+    """
+    Processa uploads 1 por vez para esse IP.
+    """
+    fila = UPLOAD_FILAS[ip]
+    while True:
+        job = fila.get()  # bloqueia até chegar item
+        if job is None:
+            fila.task_done()
+            break
+
+        caminho = job.get("caminho")
+        nome_exib = job.get("arquivo_label", os.path.basename(caminho))
+
+        # mostra status de fila -> enviando
+        PROGRESSO_UPLOAD[ip] = {"p": 0, "msg": f"Na fila: {nome_exib}"}
+
+        try:
+            tarefa_upload(ip, caminho)
+        except Exception:
+            PROGRESSO_UPLOAD[ip] = {"p": -1, "msg": "Erro de Rede"}
+        finally:
+            fila.task_done()
+
+def enfileirar_impressao(ip, caminho_completo, arquivo_label=None):
+    garantir_fila(ip)
+
+    # tamanho da fila (posição)
+    pos = UPLOAD_FILAS[ip].qsize() + 1
+    label = arquivo_label or os.path.basename(caminho_completo)
+
+    PROGRESSO_UPLOAD[ip] = {"p": 0, "msg": f"Na fila (pos {pos}): {label}"}
+
+    UPLOAD_FILAS[ip].put({
+        "caminho": caminho_completo,
+        "arquivo_label": label
+    })
+
+
+"""Fila de impressão """
+
 # --- LÓGICA DE UPLOAD ---
 def tarefa_upload(ip_alvo, caminho_completo):
-    try:
-        nome_arquivo = os.path.basename(caminho_completo)
-        with open(caminho_completo, 'rb') as f:
-            monitor = Monitor(f, ip_alvo)
-            files = {'file': (nome_arquivo, monitor)}
-            SESSAO_REDE.post(f"http://{ip_alvo}/server/files/upload", files=files, timeout=900)
-        
-        time.sleep(1.5) 
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": 95, "msg": "Iniciando..."}
-        nome_url = urllib.parse.quote(nome_arquivo)
-        
-        try:
-            SESSAO_REDE.post(f"http://{ip_alvo}/printer/print/start?filename={nome_url}", timeout=10)
-        except: pass
+    nome_arquivo = os.path.basename(caminho_completo)
 
-        time.sleep(1) 
+    try:
+        # ocupa 1 "slot" global de upload
+        with UPLOAD_SEM:
+            PROGRESSO_UPLOAD[ip_alvo] = {"p": 1, "msg": "Enviando arquivo..."}
+
+            with open(caminho_completo, 'rb') as f:
+                monitor = Monitor(f, ip_alvo)
+                files = {'file': (nome_arquivo, monitor)}
+
+                resp = SESSAO_REDE.post(
+                    f"http://{ip_alvo}/server/files/upload",
+                    files=files,
+                    timeout=900
+                )
+                resp.raise_for_status()
+
+        time.sleep(1.0)
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": 95, "msg": "Iniciando..."}
+
+        nome_url = urllib.parse.quote(nome_arquivo)
+        try:
+            SESSAO_REDE.post(
+                f"http://{ip_alvo}/printer/print/start?filename={nome_url}",
+                timeout=10
+            )
+        except:
+            pass
+
+        time.sleep(0.5)
         PROGRESSO_UPLOAD[ip_alvo] = {"p": 100, "msg": "Sucesso!"}
+
     except Exception as e:
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": "Erro de Rede"}
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": f"Erro: {str(e)[:60]}"}
+
+
 
 def registrar_conclusao(nome_arquivo):
     """🛡️ Registra a peça e salva no disco"""
@@ -483,12 +594,13 @@ def status_atualizado():
 def imprimir():
     dados = request.json
     ip, arquivo = dados.get('ip'), dados.get('arquivo')
+
     caminho = os.path.abspath(os.path.join(PASTA_RAIZ, arquivo))
     if not os.path.exists(caminho):
         return jsonify({"success": False, "message": "Arquivo não encontrado"})
-    PROGRESSO_UPLOAD[ip] = {"p": 0, "msg": "Preparando..."}
-    threading.Thread(target=tarefa_upload, args=(ip, caminho)).start()
-    return jsonify({"success": True})
+
+    enfileirar_impressao(ip, caminho, arquivo_label=os.path.basename(caminho))
+    return jsonify({"success": True, "queued": True})
 
 @app.route('/progresso_transmissao/<ip>')
 def progresso_transmissao(ip):
@@ -543,6 +655,54 @@ def dados_producao_diaria():
     """Envia os dados de contagem para o widget 'Concluídos (24h)'"""
     return jsonify(carregar_producao_24h())
 
+"""Ações em massa"""
+@app.route('/api/comando_gcode_em_massa', methods=['POST'])
+def comando_gcode_em_massa():
+    dados = request.json or {}
+    ips = dados.get('ips', [])
+    comando = dados.get('comando', '')
+
+    if not ips or not comando:
+        return jsonify({"success": False, "message": "ips/comando ausentes"}), 400
+
+    def enviar(ip):
+        try:
+            if comando == "PAUSE": url = f"http://{ip}/printer/print/pause"
+            elif comando == "RESUME": url = f"http://{ip}/printer/print/resume"
+            elif comando == "CANCEL": url = f"http://{ip}/printer/print/cancel"
+            else: url = f"http://{ip}/printer/gcode/script?script={urllib.parse.quote(comando)}"
+            requests.post(url, timeout=5.0)
+            return True
+        except:
+            return False
+
+    ok = 0
+    with ThreadPoolExecutor(max_workers=15) as ex:
+        results = list(ex.map(enviar, ips))
+        ok = sum(1 for r in results if r)
+
+    return jsonify({"success": True, "ok": ok, "total": len(ips)})
+
+
+@app.route('/imprimir_em_massa', methods=['POST'])
+def imprimir_em_massa():
+    dados = request.json or {}
+    ips = dados.get('ips', [])
+    arquivo = (dados.get('arquivo') or '').strip()
+
+    if not ips or not arquivo:
+        return jsonify({"success": False, "message": "ips/arquivo ausentes"}), 400
+
+    caminho = os.path.abspath(os.path.join(PASTA_RAIZ, arquivo))
+    if not os.path.exists(caminho):
+        return jsonify({"success": False, "message": "Arquivo não encontrado"}), 404
+
+    for ip in ips:
+        enfileirar_impressao(ip, caminho, arquivo_label=os.path.basename(caminho))
+
+    return jsonify({"success": True, "queued": True, "total": len(ips)})
+
+"""Ações em massa"""
 
 
 if __name__ == '__main__':
