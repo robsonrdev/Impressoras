@@ -151,7 +151,22 @@
         <option value="CANCEL">Cancelar</option>
       </select>
 
-      <div id="massaParams" style="margin-top:12px;"></div>
+      <div id="massaParams" style="margin-top:12px;">
+    <div id="containerNavegacaoMassa" style="background: rgba(0,0,0,0.2); border-radius: 12px; padding: 10px; display:none;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+            <small id="caminhoMassa" style="opacity:0.6;">Raiz</small>
+            <button id="btnVoltarMassa" class="btn-cc-action" style="padding:4px 10px; font-size:12px;" onclick="voltarPastaMassa()">⬅ Voltar</button>
+        </div>
+        <ul id="listaArquivosMassa" class="lista-gcodes-clean" style="max-height:250px; overflow-y:auto; list-style:none; padding:0;"></ul>
+        <div id="selecaoAtualMassa" style="margin-top:10px; padding:8px; background:rgba(255,109,0,0.1); border:1px solid rgba(255,109,0,0.3); border-radius:8px; display:none;">
+            <small style="display:block; opacity:0.7;">Arquivo Selecionado:</small>
+            <strong id="nomeArquivoMassa" style="color:#ff6d00;">Nenhum</strong>
+        </div>
+    </div>
+
+    <div id="containerInputsMassa" style="display:none;">
+        </div>
+</div>
 
       <button class="btn-primary-dashboard" style="margin-top:18px;" onclick="executarAcaoMassa()">
         Executar em Massa
@@ -536,20 +551,35 @@
                             </div>
 
                             <div class="movement-control-container">
-                                <h4>Movimentação (Eixos X/Y)</h4>
+    <h4>Movimentação (Eixos X/Y/Z)</h4>
 
-                                <div class="d-pad">
-                                    <button class="jog-btn up" onclick="moverImpressora('Y', 10)">↑</button>
+    <div class="step-selector" style="display: flex; gap: 5px; justify-content: center; margin-bottom: 15px;">
+        <button class="jog-btn step" onclick="setPasso(0.1, this)">0.1</button>
+        <button class="jog-btn step active" onclick="setPasso(1, this)">1</button>
+        <button class="jog-btn step" onclick="setPasso(10, this)">10</button>
+        <button class="jog-btn step" onclick="setPasso(50, this)">50</button>
+    </div>
 
-                                    <div class="jog-row">
-                                        <button class="jog-btn left" onclick="moverImpressora('X', -10)">←</button>
-                                        <button class="jog-btn home" onclick="enviarComandoCC('G28')">🏠</button>
-                                        <button class="jog-btn right" onclick="moverImpressora('X', 10)">→</button>
-                                    </div>
+    <div style="display: flex; align-items: center; justify-content: center; gap: 20px;">
+        <div class="d-pad">
+            <button class="jog-btn up" onclick="moverImpressora('Y', passoAtual)">↑</button>
+            <div class="jog-row">
+                <button class="jog-btn left" onclick="moverImpressora('X', -passoAtual)">←</button>
+                <button class="jog-btn home" onclick="enviarComandoCC('G28 X Y')">🏠</button>
+                <button class="jog-btn right" onclick="moverImpressora('X', passoAtual)">→</button>
+            </div>
+            <button class="jog-btn down" onclick="moverImpressora('Y', -passoAtual)">↓</button>
+        </div>
 
-                                    <button class="jog-btn down" onclick="moverImpressora('Y', -10)">↓</button>
-                                </div>
-                            </div>
+        <div class="d-pad z-axis">
+            <button class="jog-btn up" onclick="moverImpressora('Z', passoAtual)">↑</button>
+            <div class="jog-row">
+                <button class="jog-btn home" onclick="enviarComandoCC('G28 Z')">Z</button>
+            </div>
+            <button class="jog-btn down" onclick="moverImpressora('Z', -passoAtual)">↓</button>
+        </div>
+    </div>
+</div>
                         </div>
                         <!-- /Painel: Telemetria / Controles -->
 

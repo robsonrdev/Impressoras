@@ -700,13 +700,61 @@ body {
 .temp-card.interactable:hover { background: rgba(255,109,0,0.15); border-color: var(--accent-orange); }
 .temp-card.interactable::after { content: '⚙️'; position: absolute; top: 10px; right: 10px; font-size: 0.7rem; opacity: 0.5; }
 
-/* D-Pad Layout */
+/* =========================================================
+   PAINEL DE MOVIMENTAÇÃO - SUPERTECH (BETIM)
+   Efeito Glassmorphism + Minimalismo Moderno
+   ========================================================= */
+
+/* Container Principal com Efeito Glass */
 .movement-control-container {
-    margin-top: 25px;
-    padding-top: 20px;
-    border-top: 1px solid var(--border-glass);
+    background: rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 24px;
+    padding: 20px;
     text-align: center;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
 }
+
+.movement-control-container h4 {
+    margin-bottom: 20px;
+    font-weight: 300;
+    letter-spacing: 1px;
+    opacity: 0.8;
+}
+
+/* Seletor de Passo (Pill Style) */
+.step-selector {
+    background: rgba(0, 0, 0, 0.2);
+    padding: 5px;
+    border-radius: 50px;
+    display: inline-flex !important;
+    gap: 2px !important;
+    margin-bottom: 25px !important;
+}
+
+/* Botões de Passo (0.1, 1, 10, 50) */
+.jog-btn.step {
+    background: transparent;
+    border: none;
+    color: rgba(255, 255, 255, 0.6);
+    padding: 8px 16px;
+    border-radius: 50px;
+    font-size: 12px;
+    min-width: 45px;
+    height: auto;
+    transition: all 0.3s ease;
+    cursor: pointer;
+}
+
+/* Destaque Laranja para o Passo Ativo */
+.jog-btn.step.active {
+    background: #ff6d00;
+    color: white;
+    box-shadow: 0 4px 15px rgba(255, 109, 0, 0.4);
+}
+
+/* Layout dos Eixos (D-Pad) */
 .d-pad {
     display: flex;
     flex-direction: column;
@@ -714,22 +762,59 @@ body {
     gap: 8px;
     margin-top: 15px;
 }
-.jog-row { display: flex; gap: 8px; }
+
+.jog-row { 
+    display: flex; 
+    gap: 8px; 
+}
+
+/* Botões de Movimento (Estilo Minimalista) */
 .jog-btn {
-    width: 50px; height: 50px;
-    background: var(--bg-widget);
-    border: 1px solid var(--border-glass);
-    border-radius: 12px;
+    width: 54px;
+    height: 54px;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    background: linear-gradient(145deg, #2a2a2a, #222);
     color: white;
     font-size: 1.2rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    transition: 0.2s;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.jog-btn:hover { background: rgba(255,255,255,0.1); border-color: var(--text-muted); }
-.jog-btn.home { background: #3498db; border: none; font-size: 1.4rem; }
-.jog-btn.home:hover { background: #2980b9; transform: scale(1.1); }
 
+.jog-btn:hover { 
+    background: rgba(255, 255, 255, 0.1); 
+    border-color: rgba(255, 255, 255, 0.2); 
+    transform: translateY(-2px);
+}
+
+.jog-btn:active {
+    transform: scale(0.92);
+    background: #1a1a1a;
+}
+
+/* Botão Home (Destaque Azul) */
+.jog-btn.home { 
+    background: #3498db; 
+    border: none; 
+    font-size: 1.4rem; 
+    box-shadow: 0 4px 15px rgba(52, 152, 219, 0.3);
+}
+
+.jog-btn.home:hover { 
+    background: #2980b9; 
+    transform: scale(1.1); 
+    box-shadow: 0 0 20px rgba(52, 152, 219, 0.5);
+}
+
+/* Separação do Eixo Z */
+.z-axis {
+    border-left: 1px solid rgba(255, 255, 255, 0.1);
+    padding-left: 20px;
+    margin-left: 10px;
+}
 /* ==========================================================================
    7. Biblioteca G-Code & Sucesso (Estilo Mercado Pago Adaptado)
    ========================================================================== */
@@ -1017,10 +1102,50 @@ body {
   margin-left: 44px;
 }
 
+/* Estilização da Lista de Arquivos (Unificada) */
+.lista-gcodes-clean {
+    scrollbar-width: thin;
+    scrollbar-color: #ff6d00 rgba(0,0,0,0.2);
+}
+
+.lista-gcodes-clean::-webkit-scrollbar {
+    width: 6px;
+}
+
+.lista-gcodes-clean::-webkit-scrollbar-thumb {
+    background: #ff6d00;
+    border-radius: 10px;
+}
+
+/* Classe de seleção para a Ação em Massa */
+.internal-file-item.selected-massa {
+    border: 1px solid #ff6d00;
+    background: rgba(255, 109, 0, 0.15) !important;
+    box-shadow: 0 0 12px rgba(255, 109, 0, 0.2);
+}
+
+/* Ajuste de botões para caber na modal menor */
+.btn-massa-select {
+    background: #ff6d00;
+    color: white;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: 0.2s;
+}
+
+.btn-massa-select:hover {
+    background: #e65c00;
+    transform: scale(1.05);
+}
+
 /* ===========================
    RESPONSIVO – SOMENTE ATÉ 1024px
 =========================== */
-@media (max-width: 1024px){
+@media (max-width: 1600px){
 
   .hamburger-btn{
     display:inline-flex;

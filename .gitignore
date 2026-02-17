@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 .env
 tokens.json
+farm_supertech.db

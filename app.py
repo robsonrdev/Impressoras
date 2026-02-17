@@ -114,7 +114,7 @@ else:
 # Força o Python a validar se a pasta existe antes de começar
 if not os.path.exists(PASTA_RAIZ):
     print(f"🚨 ERRO CRÍTICO: A pasta {PASTA_RAIZ} não foi encontrada no servidor!")
-    
+
 # --- Inicio Funcao Carregar Maquinas ---
 def carregar_maquinas():
     """
@@ -944,14 +944,15 @@ def comando_gcode_em_massa():
 def imprimir_em_massa():
     dados = request.json or {}
     ips = dados.get('ips', [])
-    arquivo = (dados.get('arquivo') or '').strip()
+    # Limpa barras invertidas que podem vir do seletor se rodar em ambiente Windows
+    arquivo = (dados.get('arquivo') or '').strip().replace("\\", "/").lstrip("/")
 
     if not ips or not arquivo:
         return jsonify({"success": False, "message": "ips/arquivo ausentes"}), 400
 
     caminho = os.path.abspath(os.path.join(PASTA_RAIZ, arquivo))
     if not os.path.exists(caminho):
-        return jsonify({"success": False, "message": "Arquivo não encontrado"}), 404
+        return jsonify({"success": False, "message": f"Arquivo não encontrado: {arquivo}"}), 404
 
     for ip in ips:
         enfileirar_impressao(ip, caminho, arquivo_label=os.path.basename(caminho))

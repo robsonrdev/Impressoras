@@ -15,6 +15,7 @@ let pastaAtual = '';
 let uploadsAtivos = {};
 let isPollingPaused = false;
 let pollingDeep = null;
+let passoAtual = 1;
 let nomeImpressoraSelecionada = ''; // Para usar na confirmação de exclusão
 /* =========================================================
    /0) ESTADO GLOBAL / VARIÁVEIS
@@ -147,17 +148,27 @@ function confirmarExclusaoImpressora() {
     }
 }
 
+/** 📂 Arquivos da Biblioteca Central (Servidor) */
 function imprimirArquivoBiblioteca(arquivoRelativo) {
     if (!impressoraSelecionada) {
         alert("Selecione uma impressora primeiro.");
         return;
     }
 
-    // Feedback visual de carregamento no botão
+    // 1. POP-UP DE CONFIRMAÇÃO
+    const confirmacao = confirm(`📂 ENVIAR PARA FILA?\n\nArquivo: ${arquivoRelativo}\nDestino: ${nomeImpressoraSelecionada} (${impressoraSelecionada})`);
+    if (!confirmacao) return;
+
+    // 2. FEEDBACK NO BOTÃO
     const btn = event.target;
     const textoOriginal = btn.innerText;
-    btn.innerText = "ENVIANDO...";
+    btn.innerText = "PREPARANDO...";
     btn.disabled = true;
+
+    // 3. ATIVA STATUS DE CARREGANDO NO CARD (Loader que você já tem)
+    const idLimpo = impressoraSelecionada.split('.').join('-');
+    const loader = document.getElementById(`loader-${idLimpo}`);
+    if (loader) loader.style.display = 'flex';
 
     fetch('/api/imprimir_biblioteca', {
         method: 'POST',
@@ -167,63 +178,62 @@ function imprimirArquivoBiblioteca(arquivoRelativo) {
     .then(r => r.json())
     .then(res => {
         if (res.success) {
-            // Sucesso: Fecha a modal para ver o progresso no card
+            // Sucesso: Inicia o monitoramento da barra de progresso laranja
             fecharModal();
+            iniciarMonitoramentoUpload(impressoraSelecionada, idLimpo);
         } else {
             alert("❌ Erro: " + res.message);
             btn.innerText = textoOriginal;
             btn.disabled = false;
+            if (loader) loader.style.display = 'none'; // Esconde se falhar
         }
     })
     .catch(() => {
         alert("🚨 Erro de conexão com o servidor de Betim.");
         btn.innerText = textoOriginal;
         btn.disabled = false;
+        if (loader) loader.style.display = 'none';
     });
 }
 
 /* =========================================================
    4) ARQUIVOS INTERNOS - INICIAR PRODUÇÃO COM FEEDBACK
    ========================================================= */
-function imprimirArquivoInterno(filename){
+/** 💾 Arquivos da Memória Interna (Klipper) */
+function imprimirArquivoInterno(filename) {
     if (!impressoraSelecionada) {
         alert("Selecione uma impressora primeiro.");
         return;
     }
 
-    // 1. Feedback visual imediato no botão
-    // O 'event.target' identifica qual botão de 'IMPRIMIR' você clicou na lista
+    // 1. POP-UP DE CONFIRMAÇÃO
+    const confirmacao = confirm(`🚀 INICIAR AGORA?\n\nArquivo: ${filename}\nImpressora: ${nomeImpressoraSelecionada}`);
+    if (!confirmacao) return;
+
+    // 2. FEEDBACK NO BOTÃO
     const btn = event.target;
     const textoOriginal = btn.innerText;
-    
-    btn.innerText = "INICIANDO...";
+    btn.innerText = "SOLICITANDO...";
     btn.disabled = true;
-    btn.style.opacity = "0.6";
 
     fetch('/api/imprimir_interno', {
         method: 'POST',
-        headers: {'Content-Type':'application/json'},
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ip: impressoraSelecionada, filename })
     })
     .then(async r => {
         const res = await r.json();
         if (res.success) {
-            // Sucesso real: Mostra alerta e fecha o Command Center
-            alert(`✅ Sucesso: ${res.message}`);
+            // Como é interno, o Klipper inicia quase instantaneamente
             fecharModal();
         } else {
-            // Se o Python retornar erro (ex: arquivo corrompido)
             throw new Error(res.message || "Erro no Klipper");
         }
     })
     .catch(err => {
-        // Trata erros de rede ou timeout (comum em Betim)
-        alert("❌ Erro: " + err.message);
-        
-        // Restaura o botão caso dê erro para você tentar de novo
+        alert("❌ Falha: " + err.message);
         btn.innerText = textoOriginal;
         btn.disabled = false;
-        btn.style.opacity = "1";
     });
 }
 
@@ -664,15 +674,37 @@ function configurarTemperatura(tipo) {
     }
 }
 
-/** Movimentação relativa */
+function setPasso(valor, btn) {
+    passoAtual = valor;
+    
+    // Feedback visual: remove classe 'active' dos botões de passo e coloca no atual
+    document.querySelectorAll('.jog-btn.step').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    console.log(`📏 Passo de movimento definido para: ${passoAtual}mm`);
+}
+
+/** * Movimentação relativa dinâmica (X, Y e Z)
+ */
 function moverImpressora(eixo, distancia) {
     const card = document.querySelector(`.card-pro[onclick*="${impressoraSelecionada}"]`);
-    if (!card) return;
+    if (!card) {
+        alert("⚠️ Selecione uma impressora ativa no painel primeiro.");
+        return;
+    }
 
     const statusAtivo = card.className;
-    if (statusAtivo.includes('printing')) return;
+    // Impede movimento acidental durante a produção em Betim
+    if (statusAtivo.includes('printing')) {
+        console.warn("🚫 Movimento bloqueado: Impressora está em produção.");
+        return;
+    }
 
-    const gcode = `G91\nG1 ${eixo}${distancia} F3000\nG90`;
+    // G-Code: G91 (Relativo), G1 (Movimento), G90 (Absoluto)
+    // F3000 (X/Y rápido) ou F600 (Z lento para segurança do motor)
+    const feedrate = (eixo === 'Z') ? 600 : 3000;
+    const gcode = `G91\nG1 ${eixo}${distancia} F${feedrate}\nG90`;
+    
+    console.log(`🕹️ Movendo ${eixo} em ${distancia}mm (Vel: ${feedrate})`);
     enviarComandoCC(gcode);
 }
 
@@ -900,6 +932,8 @@ function ajustarEstoqueManual(produtoId, novaQtd) {
 =========================== */
 
 let selectedPrinters = new Set();
+let massaArquivoSelecionado = "";
+let pastaAtualMassa = "";
 
 /* sincroniza um checkbox individual */
 function syncSelectionFromCheckbox(cb){
@@ -982,111 +1016,217 @@ document.addEventListener('DOMContentLoaded', () => {
   if (sel) sel.addEventListener('change', renderMassaParams);
 });
 
-function renderMassaParams(){
-  const acao = document.getElementById('massaAcao')?.value;
-  const box = document.getElementById('massaParams');
-  if (!box) return;
+function renderMassaParams() {
+    const acao = document.getElementById('massaAcao')?.value;
+    const containerArquivo = document.getElementById('containerNavegacaoMassa');
+    const containerInputs = document.getElementById('containerInputsMassa');
+    
+    // Reset visual inicial
+    containerArquivo.style.display = "none";
+    containerInputs.style.display = "none";
+    containerInputs.innerHTML = ""; // Limpa apenas os inputs extras
 
-  if (acao === "PRINT_FILE"){
-    box.innerHTML = `
-      <label style="display:block; margin:10px 0 6px;">Arquivo (relativo à /app/gcodes)</label>
-      <input id="massaArquivo" type="text"
-             placeholder="Ex: pasta1/arquivo.gcode"
-             style="width:100%; padding:12px; border-radius:12px;">
-    `;
-    return;
-  }
+    if (acao === "PRINT_FILE") {
+        // Mostra o navegador e esconde o resto
+        containerArquivo.style.display = "block";
+        if (!massaArquivoSelecionado) {
+            carregarPastaMassa(""); // Só recarrega se não houver seleção
+        }
+    } 
+    else if (acao === "SET_TEMP") {
+        // Mostra os campos de temperatura e esconde o navegador
+        containerInputs.style.display = "block";
+        containerInputs.innerHTML = `
+            <label style="display:block; margin:10px 0 6px;">Aquecer</label>
+            <select id="massaTipoTemp" style="width:100%; padding:12px; border-radius:12px; background:#1a1a1a; color:white; border:1px solid rgba(255,255,255,0.1);">
+                <option value="bico">Bico (M104)</option>
+                <option value="mesa">Mesa (M140)</option>
+            </select>
+            <label style="display:block; margin:10px 0 6px;">Temperatura (°C)</label>
+            <input id="massaTemp" type="number" placeholder="Ex: 200" style="width:100%; padding:12px; border-radius:12px; background:#1a1a1a; color:white; border:1px solid rgba(255,255,255,0.1);">
+        `;
+    } 
+    else {
+        // Outros comandos (Home, Pause, etc) não precisam de inputs extras
+        containerInputs.style.display = "block";
+        containerInputs.innerHTML = `<p style="opacity:.6; margin-top:10px; font-size:13px;">💡 Esta ação não requer parâmetros adicionais.</p>`;
+    }
+}
 
-  if (acao === "SET_TEMP"){
-    box.innerHTML = `
-      <label style="display:block; margin:10px 0 6px;">Aquecer</label>
-      <select id="massaTipoTemp" style="width:100%; padding:12px; border-radius:12px;">
-        <option value="bico">Bico (M104)</option>
-        <option value="mesa">Mesa (M140)</option>
-      </select>
+function carregarPastaMassa(caminho) {
+    const ul = document.getElementById('listaArquivosMassa');
+    if (!ul) return;
 
-      <label style="display:block; margin:10px 0 6px;">Temperatura (°C)</label>
-      <input id="massaTemp" type="number"
-             placeholder="Ex: 200"
-             style="width:100%; padding:12px; border-radius:12px;">
-    `;
-    return;
-  }
+    ul.innerHTML = '<li class="loading-state" style="padding:15px; opacity:0.6; font-size:13px;">Buscando gcodes...</li>';
 
-  box.innerHTML = `<p style="opacity:.75; margin-top:10px;">Sem parâmetros adicionais.</p>`;
+    fetch('/navegar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pasta: caminho })
+    })
+    .then(r => r.json())
+    .then(data => {
+        pastaAtualMassa = data.atual || "";
+        document.getElementById('caminhoMassa').innerText = pastaAtualMassa || "Raiz";
+        document.getElementById('btnVoltarMassa').disabled = (pastaAtualMassa === "");
+        
+        ul.innerHTML = "";
+
+        // 1. Renderiza Pastas
+        data.pastas.forEach(p => {
+            const li = document.createElement('li');
+            li.className = 'internal-file-item';
+            li.innerHTML = `
+                <div class="file-info">
+                    <strong class="file-name-text">📁 ${p.nome}</strong>
+                    <small class="file-size-tag">Diretório</small>
+                </div>
+                <button class="btn-massa-select" style="background:#444;">ABRIR</button>
+            `;
+            li.onclick = () => carregarPastaMassa(pastaAtualMassa ? `${pastaAtualMassa}/${p.nome}` : p.nome);
+            ul.appendChild(li);
+        });
+
+        // 2. Renderiza Arquivos
+        data.arquivos.forEach(f => {
+            const rel = pastaAtualMassa ? `${pastaAtualMassa}/${f.nome}` : f.nome;
+            const isGcode = f.nome.toLowerCase().endsWith('.gcode') || f.nome.toLowerCase().endsWith('.bgcode');
+            
+            const li = document.createElement('li');
+            li.className = 'internal-file-item';
+            // Mantém selecionado se você navegar e voltar
+            if (massaArquivoSelecionado === rel) li.classList.add('selected-massa');
+
+            li.innerHTML = `
+                <div class="file-info">
+                    <strong class="file-name-text">${f.nome}</strong>
+                    <small class="file-size-tag">${f.tamanho}</small>
+                </div>
+                <button class="btn-massa-select" ${isGcode ? '' : 'disabled style="opacity:0.3;"'}>
+                    ${isGcode ? 'SELECIONAR' : 'BLOQUEADO'}
+                </button>
+            `;
+
+            li.onclick = (e) => {
+                if (!isGcode) return;
+                
+                // Salva a seleção global
+                massaArquivoSelecionado = rel;
+                
+                // Atualiza o painel de feedback
+                document.getElementById('selecaoAtualMassa').style.display = "block";
+                document.getElementById('nomeArquivoMassa').innerText = f.nome;
+                
+                // Feedback visual: remove de todos e coloca no clicado
+                document.querySelectorAll('#listaArquivosMassa li').forEach(el => el.classList.remove('selected-massa'));
+                li.classList.add('selected-massa');
+            };
+            ul.appendChild(li);
+        });
+
+        if (data.pastas.length === 0 && data.arquivos.length === 0) {
+            ul.innerHTML = '<li class="empty-msg" style="padding:20px; text-align:center; opacity:0.5;">Pasta vazia</li>';
+        }
+    })
+    .catch(err => {
+        ul.innerHTML = '<li class="error-msg">Erro ao carregar biblioteca.</li>';
+    });
+}
+
+function voltarPastaMassa() {
+    let partes = pastaAtualMassa.split('/');
+    partes.pop();
+    carregarPastaMassa(partes.join('/'));
 }
 
 /* ===========================
    EXECUÇÃO EM MASSA
 =========================== */
-function executarAcaoMassa(){
-  const ips = getSelectedIps();
-  if (ips.length === 0) return alert("Selecione pelo menos 1 impressora.");
+/* ===========================
+   EXECUÇÃO EM MASSA (VERSÃO ATUALIZADA COM NAVEGADOR)
+   =========================== */
+function executarAcaoMassa() {
+    // 1. Validação de Impressoras Selecionadas
+    const ips = getSelectedIps();
+    if (ips.length === 0) {
+        alert("⚠️ Selecione pelo menos 1 impressora na grade antes de executar.");
+        return;
+    }
 
-  const acao = document.getElementById('massaAcao')?.value;
+    const acao = document.getElementById('massaAcao')?.value;
 
-  if (acao === "PRINT_FILE"){
-    const arquivo = document.getElementById('massaArquivo')?.value?.trim();
-    if (!arquivo) return alert("Informe o arquivo.");
+    // --- CASO 1: IMPRESSÃO DE ARQUIVO ---
+    if (acao === "PRINT_FILE") {
+        // Valida se um arquivo foi clicado no navegador visual da modal
+        if (!massaArquivoSelecionado) {
+            alert("⚠️ Selecione um arquivo na lista da biblioteca antes de clicar em Executar.");
+            return;
+        }
 
-    if (!confirm(`Enviar "${arquivo}" para ${ips.length} impressoras?`)) return;
+        const confirmacao = confirm(`🚀 INICIAR PRODUÇÃO EM MASSA?\n\nArquivo: ${massaArquivoSelecionado}\nDestino: ${ips.length} impressoras selecionadas.`);
+        if (!confirmacao) return;
 
-    fetch('/imprimir_em_massa', {
-  method: 'POST',
-  headers: {'Content-Type': 'application/json'},
-  body: JSON.stringify({ ips, arquivo })
-})
-.then(async r => {
-  const text = await r.text();
-  let json;
-  try { json = JSON.parse(text); } catch { json = null; }
+        fetch('/imprimir_em_massa', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ips, arquivo: massaArquivoSelecionado })
+        })
+        .then(async r => {
+            const res = await r.json();
+            if (!r.ok) throw new Error(res.message || `Erro HTTP ${r.status}`);
+            return res;
+        })
+        .then(res => {
+            alert(`✅ Sucesso! Enfileirado para ${res.total || ips.length} impressoras.`);
+            fecharModalMassa();
+            // Reset da seleção para evitar envios acidentais no futuro
+            massaArquivoSelecionado = ""; 
+        })
+        .catch(err => alert("❌ Falha no envio em massa: " + err.message));
 
-  if (!r.ok) {
-    throw new Error(json?.message || text || `HTTP ${r.status}`);
-  }
-  return json;
-})
-.then(res => {
-  alert(`✅ Enfileirado para ${res.total || ips.length} impressoras!`);
-  fecharModalMassa();
-})
-.catch(err => alert("❌ Falha no envio em massa: " + err.message));
+        return; // Encerra aqui para ações de impressão
+    }
 
+    // --- CASO 2: OUTROS COMANDOS (TEMPERATURA / MOVIMENTO / STATUS) ---
+    let comando = "";
 
-    return;
-  }
+    if (acao === "SET_TEMP") {
+        const tipo = document.getElementById('massaTipoTemp')?.value;
+        const temp = document.getElementById('massaTemp')?.value;
+        if (!temp || isNaN(temp)) {
+            alert("⚠️ Informe uma temperatura válida.");
+            return;
+        }
+        // Tradução para G-Code: M140 (Mesa) ou M104 (Bico)
+        comando = (tipo === "mesa") ? `M140 S${temp}` : `M104 S${temp}`;
+    } 
+    else if (acao === "HOME_ALL") {
+        comando = "G28";
+    } 
+    else if (acao === "PAUSE" || acao === "RESUME" || acao === "CANCEL") {
+        comando = acao;
+    } 
+    else {
+        alert("❌ Ação inválida ou não reconhecida.");
+        return;
+    }
 
-  let comando = "";
-
-  if (acao === "SET_TEMP"){
-    const tipo = document.getElementById('massaTipoTemp')?.value;
-    const temp = document.getElementById('massaTemp')?.value;
-    if (!temp || isNaN(temp)) return alert("Temperatura inválida.");
-
-    comando = (tipo === "mesa") ? `M140 S${temp}` : `M104 S${temp}`;
-  }
-  else if (acao === "HOME_ALL"){
-    comando = "G28";
-  }
-  else if (acao === "PAUSE" || acao === "RESUME" || acao === "CANCEL"){
-    comando = acao;
-  }
-  else {
-    return alert("Ação inválida.");
-  }
-
-  fetch('/api/comando_gcode_em_massa', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ ips, comando })
-  })
-  .then(r => r.json())
-  .then(res => {
-    if (res.success) alert(`✅ Comando enviado! (${res.ok || 0}/${res.total || ips.length})`);
-    else alert("❌ Falha: " + (res.message || "erro"));
-    fecharModalMassa();
-  })
-  .catch(err => alert("🚨 Erro de rede: " + err));
+    // Envio de comandos G-Code ou controle de estado em massa
+    fetch('/api/comando_gcode_em_massa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ips, comando })
+    })
+    .then(r => r.json())
+    .then(res => {
+        if (res.success) {
+            alert(`✅ Comando "${comando}" enviado com sucesso! (${res.ok || 0}/${res.total || ips.length})`);
+            fecharModalMassa();
+        } else {
+            throw new Error(res.message || "Erro desconhecido");
+        }
+    })
+    .catch(err => alert("🚨 Erro de rede ao enviar comando em massa: " + err.message));
 }
 
 /* ===========================
