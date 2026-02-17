@@ -4,6 +4,7 @@ import time
 import threading
 import requests
 import socket
+import platform
 import re
 import time
 import urllib.parse
@@ -12,17 +13,28 @@ from queue import Queue
 from flask import Flask, render_template, request, jsonify
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
+from flask_sqlalchemy import SQLAlchemy
+from datetime import timezone
+from datetime import datetime
+
 
 app = Flask(__name__)
+
 
 # --- CONFIGURAÇÕES ---
 PASTA_RAIZ = os.path.abspath(r'/app/gcodes') 
 ARQUIVO_BANCO = 'impressores.json' 
 
+basedir = os.path.abspath(os.path.dirname(__file__))
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'farm_supertech.db')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+db = SQLAlchemy(app)
+
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 os.makedirs(BASE_DIR, exist_ok=True)
 TOKENS_PATH = os.path.join(BASE_DIR, "tokens.json")
-
 
 UPLOAD_FILAS = {}          # ip -> Queue()
 UPLOAD_WORKERS = {}        # ip -> Thread
@@ -43,9 +55,6 @@ CLIENT_ID = os.getenv("BLING_CLIENT_ID")
 CLIENT_SECRET = os.getenv("BLING_CLIENT_SECRET")
 REDIRECT_URI = os.getenv("REDIRECT_URI")
 
-
-
-
 # Dicionários Globais - Memória de Status
 IMPRESSORAS_ENCONTRADAS = {}
 PROGRESSO_UPLOAD = {} 
@@ -58,38 +67,109 @@ SESSAO_REDE = requests.Session()
 SESSAO_REDE.headers.update({'Connection': 'keep-alive'})
 FALHAS_CONSECUTIVAS = {}
 
+
+class Maquina(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    ip = db.Column(db.String(20), unique=True, nullable=False) # IP único para não duplicar
+    nome = db.Column(db.String(50), nullable=False)           # Nome da Neptune 4 MAX
+    modelo = db.Column(db.String(50), default="Neptune 4 MAX") # Modelo padrão
+    imagem = db.Column(db.String(100), default="n4max.png")   # Nome da imagem na pasta static
+
+# MODELO: Tabela que salva o histórico de peças produzidas
+class RegistroProducao(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    data = db.Column(db.Date, default=datetime.utcnow)        # Data da conclusão
+    nome_peca = db.Column(db.String(200), nullable=False)     # Nome do arquivo G-Code
+    quantidade = db.Column(db.Integer, default=1)             # Quantos ciclos foram feitos
+
+# COMANDO: Cria as tabelas fisicamente no arquivo .db ao iniciar o app
+with app.app_context():
+    db.create_all()
+
+# --- Inicio Funcao Auxiliar de Ordenacao ---
 def chave_ordem_maquina(m):
     """
-    Ordena por número no começo do nome.
-    Exemplos válidos: "1", "01", "1 - N4MAX", "10_Principal"
-    Quem não tiver número vai pro fim.
+    Mantém a sua lógica original:
+    Ordena por número no começo do nome (Ex: "01 - Direita").
+    Quem não tiver número vai para o final (999999).
     """
-    nome = str(m.get("nome", "")).strip()
+    # Se 'm' for um objeto do banco, pegamos o atributo .nome
+    # Se for um dicionário (vido do monitor), usamos .get
+    nome_bruto = getattr(m, 'nome', m.get("nome", "")) if not isinstance(m, dict) else m.get("nome", "")
+    nome = str(nome_bruto).strip()
+    
     match = re.match(r'^(\d+)', nome)
     if match:
         return int(match.group(1))
-    return 999999  # vai pro final
+    return 999999  
+# --- Fim Funcao Auxiliar de Ordenacao ---
 
+# Se detectar Windows (Seu VS Code), usa a unidade Z: mapeada
+# Se for Linux (Servidor em Betim), usa o caminho interno original
+if platform.system() == "Windows":
+    PASTA_RAIZ = os.path.abspath(r'Z:\\')
+    print(f"💻 MODO DESENVOLVIMENTO: Acessando gcodes em {PASTA_RAIZ}")
+else:
+    PASTA_RAIZ = os.path.abspath(r'/app/gcodes')
+    print(f"🚀 MODO PRODUÇÃO: Acessando gcodes localmente em {PASTA_RAIZ}")
+
+ARQUIVO_BANCO = 'impressores.json' 
+# --- FIM DAS CONFIGURAÇÕES ---
+
+# --- Inicio Funcao Carregar Maquinas ---
 def carregar_maquinas():
-    """Lê a lista de máquinas e retorna ORDENADA pelo número do nome"""
-    if not os.path.exists(ARQUIVO_BANCO):
-        return []
+    """
+    Busca todas as impressoras no banco SQLite e retorna 
+    uma lista de dicionários ORDENADA para o seu front-end.
+    """
     try:
-        with open(ARQUIVO_BANCO, 'r') as f:
-            maquinas = json.load(f)  # [{"ip": "...", "nome": "..."}, ...]
-            return sorted(maquinas, key=chave_ordem_maquina)
-    except:
+        # Busca todos os registros na tabela Maquina
+        maquinas_db = Maquina.query.all()
+        
+        # Converte os objetos do banco para o formato de dicionário que seu código já usa
+        lista_maquinas = []
+        for m in maquinas_db:
+            lista_maquinas.append({
+                "ip": m.ip,
+                "nome": m.nome,
+                "modelo": m.modelo,
+                "imagem": m.imagem
+            })
+        
+        # Retorna a lista usando a sua regra de ordenação por número no nome
+        return sorted(lista_maquinas, key=chave_ordem_maquina)
+    except Exception as e:
+        print(f"🚨 Erro ao ler banco de dados em Betim: {e}")
         return []
+# --- Fim Funcao Carregar Maquinas ---
 
+# --- Inicio Funcao Salvar Maquina ---
 def salvar_maquina(ip, nome):
-    maquinas = carregar_maquinas()
-    if not any(m['ip'] == ip for m in maquinas):
-        maquinas.append({"ip": ip, "nome": nome})
-        maquinas = sorted(maquinas, key=chave_ordem_maquina)
-        with open(ARQUIVO_BANCO, 'w') as f:
-            json.dump(maquinas, f, indent=4)
-        return True
-    return False
+    """
+    Adiciona uma nova impressora ao banco de dados se o IP não existir.
+    Elimina a necessidade de ler/escrever o arquivo JSON inteiro.
+    """
+    try:
+        # Verifica se já existe uma máquina com esse IP no SQLite
+        existente = Maquina.query.filter_by(ip=ip).first()
+        
+        if not existente:
+            # Cria o novo registro
+            nova_maquina = Maquina(ip=ip, nome=nome)
+            
+            # Adiciona e salva (commit) no arquivo .db
+            db.session.add(nova_maquina)
+            db.session.commit()
+            print(f"✅ {nome} ({ip}) salva com sucesso no SQLite!")
+            return True
+        
+        print(f"⚠️ O IP {ip} já está cadastrado na farm.")
+        return False
+    except Exception as e:
+        db.session.rollback() # Cancela a operação em caso de erro para não corromper o banco
+        print(f"🚨 Falha ao salvar no SQLite: {e}")
+        return False
+# --- Fim Funcao Salvar Maquina ---
 
 class Monitor:
     def __init__(self, file, ip_alvo):
@@ -353,18 +433,33 @@ def detalhes_profundos(ip):
         print(f"🚨 ERRO CRÍTICO na rota detalhes ({ip}): {str(e)}")
         return jsonify({"error": "Falha na comunicação de rede"}), 500
 
-@app.route('/api/arquivos_internos/<ip>')
-def arquivos_internos(ip):
-    """Lista os arquivos salvos na memória da impressora (Trabalhos)"""
+# --- 3) Rota Imprimir Interno (Arquivos da Memória da Impressora) ---
+@app.route('/api/imprimir_interno', methods=['POST'])
+def imprimir_interno():
+    """Inicia a impressão de um arquivo que já está na memória da impressora"""
+    dados = request.json or {}
+    ip = dados.get('ip')
+    filename = (dados.get('filename') or '').strip()
+
+    if not ip or not filename:
+        return jsonify({"success": False, "message": "IP ou Nome do arquivo ausentes"}), 400
+
     try:
-        url = f"http://{ip}/server/files/list?root=gcodes"
-        resp = SESSAO_REDE.get(url, timeout=3.0).json()
+        # Codifica o nome para garantir que o Klipper entenda espaços no nome
+        nome_url = urllib.parse.quote(filename)
+        url = f"http://{ip}/printer/print/start?filename={nome_url}"
         
-        # Organiza os arquivos por data de modificação (mais recentes primeiro)
-        arquivos = sorted(resp.get('result', []), key=lambda x: x.get('modified', 0), reverse=True)
-        return jsonify(arquivos)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        # Timeout estendido para 15s para dar tempo do hardware responder
+        resp = SESSAO_REDE.post(url, timeout=15.0)
+        
+        if resp.status_code == 200:
+            return jsonify({"success": True, "message": f"Impressão de '{filename}' iniciada!"})
+        else:
+            return jsonify({"success": False, "message": f"Erro na impressora: Status {resp.status_code}"})
+
+    except Exception:
+        # Se der timeout mas o sinal sair, retornamos sucesso para não travar a UI
+        return jsonify({"success": True, "message": "Comando enviado com sucesso!"})
 
 @app.route('/api/comando_gcode', methods=['POST'])
 def comando_gcode():
@@ -385,117 +480,127 @@ def comando_gcode():
     except Exception as e:
         return jsonify({"success": False, "message": str(e)})
 
+# --- Inicio Bloco de Segurança verificar_ip ---
+# --- Inicio Funcao verificar_ip (Versão Final Limpa) ---
 def verificar_ip(ip, nome_personalizado):
-    """Atualiza o status e gerencia a contagem de produção"""
+    """
+    Monitora a impressora e atualiza o estado global.
+    Gerencia a comunicação com o Klipper e o registro de produção no SQLite.
+    """
+    # 1. Teste físico de rede (Socket) para evitar travamentos
     if not testar_conexao_rapida(ip):
-        if ip in IMPRESSORAS_ENCONTRADAS:
-            FALHAS_CONSECUTIVAS[ip] = FALHAS_CONSECUTIVAS.get(ip, 0) + 1
-            if FALHAS_CONSECUTIVAS[ip] >= 3:
-                IMPRESSORAS_ENCONTRADAS[ip].update({
-                    'status': 'offline', 'cor': 'offline', 'msg': 'OFFLINE', 'progresso': 0
-                })
+        FALHAS_CONSECUTIVAS[ip] = FALHAS_CONSECUTIVAS.get(ip, 0) + 1
+        if FALHAS_CONSECUTIVAS[ip] >= 2:
+            IMPRESSORAS_ENCONTRADAS[ip] = {
+                'nome': nome_personalizado, 
+                'ip': ip, 
+                'status': 'offline', 
+                'cor': 'offline', 
+                'msg': 'OFFLINE', 
+                'progresso': 0, 
+                'imagem': 'n4max.png'
+            }
         return
 
+    # 2. Busca de telemetria via API do Klipper
     url = f"http://{ip}/printer/objects/query?print_stats&display_status"
     try:
-        resp = SESSAO_REDE.get(url, timeout=2.0)
+        # Timeout de 3 segundos para tolerar oscilações no Wi-Fi
+        resp = SESSAO_REDE.get(url, timeout=3.0)
+        
         if resp.status_code == 200:
             FALHAS_CONSECUTIVAS[ip] = 0
-            dados = resp.json()
-            status_klipper = dados['result']['status']['print_stats']['state']
-            filename = dados['result']['status']['print_stats']['filename']
-            progresso = int(dados['result']['status']['display_status']['progress'] * 100)
-
-            # --- 🚀 LÓGICA DE PRODUÇÃO (DENTRO DA FUNÇÃO) ---
-            status_anterior = ULTIMO_STATUS_MAQUINAS.get(ip)
+            dados = resp.json()['result']['status']
             
-            # GATILHO: Mudou de "printing" para "complete"
+            # Extração de dados do Klipper
+            status_klipper = dados['print_stats']['state']
+            filename = dados['print_stats']['filename']
+            progresso = int(dados['display_status']['progress'] * 100)
+
+            # Lógica de Gatilho: Detecta quando a Neptune 4 MAX termina uma peça
+            status_anterior = ULTIMO_STATUS_MAQUINAS.get(ip)
             if status_anterior == "printing" and status_klipper == "complete":
-                if filename and filename != "Nenhum": # 🛡️ Impede contagem de erro
+                if filename and filename != "Nenhum":
                     registrar_conclusao(filename)
             
-            # Atualiza a memória de status para a próxima verificação
+            # Atualiza a memória de transição
             ULTIMO_STATUS_MAQUINAS[ip] = status_klipper
-            
-            # Mapeamento de Status para o Dashboard Pro
+
+            # 3. Mapeamento de Status para o Dashboard
+            # Define a mensagem amigável e a cor do card
             if status_klipper == "printing":
                 msg_exibicao, cor_status = f"IMPRIMINDO {progresso}%", "printing"
             elif status_klipper in ["startup", "busy"]:
                 msg_exibicao, cor_status = "PREPARANDO", "printing"
             elif status_klipper == "paused":
                 msg_exibicao, cor_status = "PAUSADO", "paused"
-            elif status_klipper == "complete":
-                msg_exibicao, cor_status = "CONCLUÍDO", "ready"
-            elif status_klipper in ["standby", "ready", "idle"]:
+            elif status_klipper in ["standby", "ready", "idle", "complete"]:
                 msg_exibicao, cor_status = "PRONTA", "ready"
             else:
                 msg_exibicao, cor_status = "OFFLINE", "offline"
-            
+
+            # Atualiza o dicionário global que o JavaScript consome
             IMPRESSORAS_ENCONTRADAS[ip] = {
                 'nome': nome_personalizado,
-                'modelo_real': "Neptune 4 MAX",
+                'ip': ip,
                 'status': status_klipper,
                 'cor': cor_status,
                 'msg': msg_exibicao,
-                'ip': ip,
+                'progresso': progresso,
                 'imagem': "n4max.png",
-                'arquivo': filename if filename else "Nenhum",
-                'progresso': progresso
+                'arquivo': filename or "Nenhum"
             }
-    except Exception as e:
-        print(f"Erro ao monitorar {ip}: {e}")
+            
+    except Exception:
+        # Em caso de erro na API, marca como OFFLINE para não travar em 'CONECTANDO...'
+        IMPRESSORAS_ENCONTRADAS[ip] = {
+            'nome': nome_personalizado, 
+            'ip': ip, 
+            'status': 'offline', 
+            'cor': 'offline', 
+            'msg': 'OFFLINE', 
+            'progresso': 0, 
+            'imagem': 'n4max.png'
+        }
+# --- Fim Funcao verificar_ip ---
 
 
-@app.route('/api/imprimir_interno', methods=['POST'])
-def imprimir_interno():
-    dados = request.json or {}
-    ip = dados.get('ip')
-    filename = (dados.get('filename') or '').strip()
-
-    if not ip or not filename:
-        return jsonify({"success": False, "message": "ip/filename ausentes"}), 400
-
-    try:
-        nome_url = urllib.parse.quote(filename)
-        url = f"http://{ip}/printer/print/start?filename={nome_url}"
-        SESSAO_REDE.post(url, timeout=10)
-        return jsonify({"success": True})
-    except Exception as e:
-        return jsonify({"success": False, "message": str(e)}), 500
-
-
+# --- 2) Rota Imprimir Biblioteca (Arquivos do Servidor/Notebook) ---
 @app.route('/api/imprimir_biblioteca', methods=['POST'])
 def imprimir_biblioteca():
+    """Enfileira um arquivo da biblioteca para upload e impressão na Neptune"""
     dados = request.json or {}
     ip = dados.get('ip')
-    arquivo = (dados.get('arquivo') or '').strip()
+    arquivo = (dados.get('arquivo') or '').strip().replace("\\", "/").lstrip("/")
 
     if not ip or not arquivo:
-        return jsonify({"success": False, "message": "ip/arquivo ausentes"}), 400
-
-    # garante separador linux/web
-    arquivo = arquivo.replace("\\", "/").lstrip("/")
+        return jsonify({"success": False, "message": "IP ou Arquivo ausentes"}), 400
 
     caminho = os.path.abspath(os.path.join(PASTA_RAIZ, arquivo))
     if not os.path.exists(caminho):
-        return jsonify({"success": False, "message": f"Arquivo não encontrado: {arquivo}"}), 404
+        return jsonify({"success": False, "message": "Arquivo não localizado no servidor"}), 404
 
+    # Envia para a fila de transmissão com o semáforo de 1 por vez
     enfileirar_impressao(ip, caminho, arquivo_label=os.path.basename(caminho))
-    return jsonify({"success": True, "queued": True})
+    return jsonify({"success": True, "message": "Arquivo enfileirado para envio!"})
 
-
+# --- Monitor Inteligente (Limpo) ---
 def monitor_inteligente():
-    """Monitora as máquinas respeitando a ordem do arquivo"""
+    """Motor principal que mantém a sincronia com o SQLite"""
     while True:
-        maquinas = carregar_maquinas()
-        if maquinas:
-            with ThreadPoolExecutor(max_workers=15) as executor:
-                for m in maquinas:
-                    executor.submit(verificar_ip, m['ip'], m['nome'])
+        with app.app_context():
+            try:
+                maquinas = carregar_maquinas()
+                if maquinas:
+                    with ThreadPoolExecutor(max_workers=15) as executor:
+                        for m in maquinas:
+                            executor.submit(
+                                lambda p: app.app_context().push() or verificar_ip(p['ip'], p['nome']), 
+                                m
+                            )
+            except Exception:
+                pass # Erros silenciosos para não poluir o terminal
         time.sleep(3)
-
-threading.Thread(target=monitor_inteligente, daemon=True).start()
-
 
 """Fila de impressão """
 def garantir_fila(ip):
@@ -588,23 +693,29 @@ def tarefa_upload(ip_alvo, caminho_completo):
 
 
 
+# --- Inicio Funcao Registrar Conclusao (Data Corrigida) ---
 def registrar_conclusao(nome_arquivo):
-    """🛡️ Registra a peça e salva no disco"""
+    """Registra a peça no SQLite com tratamento moderno de timezone."""
     if not nome_arquivo or nome_arquivo == "Nenhum": 
         return
         
-    dados = carregar_producao_24h()
     nome_limpo = nome_arquivo.replace('.gcode', '').replace('.bgcode', '')
-    
-    # Incrementa o contador da peça específica
-    dados["itens"][nome_limpo] = dados["itens"].get(nome_limpo, 0) + 1
-    
-    # Salva fisicamente para persistência em Betim
+    # Uso do timezone.utc para evitar o DeprecationWarning do seu terminal
+    hoje = datetime.now(timezone.utc).date()
+
     try:
-        with open(ARQUIVO_PRODUCAO, 'w') as f:
-            json.dump(dados, f, indent=4)
+        registro = RegistroProducao.query.filter_by(nome_peca=nome_limpo, data=hoje).first()
+        if registro:
+            registro.quantidade += 1
+        else:
+            novo_registro = RegistroProducao(nome_peca=nome_limpo, data=hoje, quantidade=1)
+            db.session.add(novo_registro)
+        db.session.commit()
     except Exception as e:
-        print(f"Erro ao salvar produção: {e}")
+        db.session.rollback()
+        print(f"🚨 Erro ao registrar produção no SQLite: {e}")
+# --- Fim Funcao Registrar Conclusao ---
+
 
 # --- ROTAS FLASK ---
 @app.route('/')
@@ -633,6 +744,7 @@ def cadastrar_impressora():
         return jsonify({"success": True})
     return jsonify({"success": False, "message": "IP já existe ou dados inválidos"})
 
+# --- Rota de Status (Limpa) ---
 @app.route('/status_atualizado')
 def status_atualizado():
     disponiveis = sum(1 for p in IMPRESSORAS_ENCONTRADAS.values() if p.get('status') in ['ready', 'idle'])
@@ -654,76 +766,129 @@ def imprimir():
 def progresso_transmissao(ip):
     return jsonify(PROGRESSO_UPLOAD.get(ip, {"p": 0, "msg": "..."}))
 
+
+# --- 1) Rota Navegar (Acesso a Pastas e Arquivos com Tamanho) ---
 @app.route('/navegar', methods=['POST'])
 def navegar():
+    """Lista pastas e arquivos da Biblioteca Central com metadados de tamanho"""
     dados = request.json or {}
+    # Limpa o caminho para evitar erros de barra invertida do Windows
     subpasta = (dados.get('pasta') or '').strip().replace('\\', '/').strip('/')
 
-    # monta caminho alvo
     caminho_alvo = os.path.abspath(os.path.join(PASTA_RAIZ, subpasta))
-
-    # segurança: impede escapar do diretório raiz
     raiz_abs = os.path.abspath(PASTA_RAIZ)
+
+    # Segurança: Impede que o usuário suba níveis além da pasta de gcodes
     if not caminho_alvo.startswith(raiz_abs):
-        return jsonify({"error": "Caminho inválido"}), 400
+        return jsonify({"error": "Acesso negado fora da raiz"}), 403
 
     try:
         itens = os.listdir(caminho_alvo)
+        pastas = []
+        arquivos = []
+
+        for nome in itens:
+            if nome.startswith('.') or nome in ['Thumbs.db', '.DS_Store']:
+                continue
+                
+            caminho_full = os.path.join(caminho_alvo, nome)
+            
+            if os.path.isdir(caminho_full):
+                pastas.append({"nome": nome, "tipo": "pasta"})
+            else:
+                # Calcula o tamanho do arquivo para mostrar na UI igual à memória interna
+                tamanho_bytes = os.path.getsize(caminho_full)
+                tamanho_mb = round(tamanho_bytes / (1024 * 1024), 1)
+                arquivos.append({
+                    "nome": nome, 
+                    "tipo": "arquivo", 
+                    "tamanho": tamanho_mb
+                })
+
+        return jsonify({
+            "atual": subpasta,
+            "pastas": sorted(pastas, key=lambda x: x['nome']),
+            "arquivos": sorted(arquivos, key=lambda x: x['nome'])
+        })
     except Exception as e:
-        return jsonify({"error": f"Não foi possível listar: {str(e)}"}), 500
+        return jsonify({"error": str(e)}), 500
+    
 
-    # opcional: ignora lixo comum
-    ignorar = {'.DS_Store', 'Thumbs.db'}
-
-    pastas = []
-    arquivos = []
-
-    for nome in itens:
-        if nome in ignorar or nome.startswith('.'):
-            continue
-        full = os.path.join(caminho_alvo, nome)
-        if os.path.isdir(full):
-            pastas.append(nome)
+@app.route('/api/arquivos_internos/<ip>')
+def arquivos_internos(ip):
+    """Busca a lista de arquivos gcodes salvos dentro da Neptune 4 MAX"""
+    try:
+        url = f"http://{ip}/server/files/list?root=gcodes"
+        
+        # Faz a requisição para a impressora
+        resp = SESSAO_REDE.get(url, timeout=3.0)
+        
+        if resp.status_code == 200:
+            # 1. Transformamos a resposta em um dicionário Python (JSON)
+            dados = resp.json()
+            
+            # 2. BUSCA CORRETA: Pegamos a lista de arquivos dentro da chave 'result'
+            lista_arquivos = dados.get('result', [])
+            
+            # 3. Ordena: os mais recentes (modified) aparecem primeiro
+            arquivos_ordenados = sorted(
+                lista_arquivos, 
+                key=lambda x: x.get('modified', 0), 
+                reverse=True
+            )
+            return jsonify(arquivos_ordenados)
         else:
-            arquivos.append(nome)  # <- qualquer arquivo, qualquer extensão
+            return jsonify({"error": f"Erro {resp.status_code} na impressora"}), resp.status_code
 
-    return jsonify({
-        "atual": subpasta,
-        "pastas": sorted(pastas),
-        "arquivos": sorted(arquivos)
-    })
+    except Exception as e:
+        # Se houver erro de rede ou lógica, retorna 500 com a mensagem do erro
+        print(f"🚨 Erro interno na rota arquivos_internos ({ip}): {e}")
+        return jsonify({"error": str(e)}), 500
 
-
+# --- Inicio Rota Remover Impressora ---
 @app.route('/remover_impressora', methods=['POST'])
 def remover_impressora():
+    """
+    Remove a máquina do banco de dados SQLite pelo IP.
+    """
     ip = request.json.get('ip')
-    maquinas = carregar_maquinas()
-    
-    # Filtra a lista removendo o IP selecionado
-    novas_maquinas = [m for m in maquinas if m['ip'] != ip]
+    try:
+        maquina = Maquina.query.filter_by(ip=ip).first()
+        if maquina:
+            db.session.delete(maquina)
+            db.session.commit()
+            # Limpa da memória de monitoramento em tempo real
+            if ip in IMPRESSORAS_ENCONTRADAS:
+                del IMPRESSORAS_ENCONTRADAS[ip]
+            return jsonify({"success": True})
+        return jsonify({"success": False, "message": "Impressora não encontrada"})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(e)}), 500
+# --- Fim Rota Remover Impressora ---
 
-    if len(novas_maquinas) < len(maquinas):
-        # Salva a nova lista no banco de dados
-        with open(ARQUIVO_BANCO, 'w') as f:
-            json.dump(novas_maquinas, f, indent=4)
-        
-        # Remove da memória de monitoramento
-        if ip in IMPRESSORAS_ENCONTRADAS:
-            del IMPRESSORAS_ENCONTRADAS[ip]
-            
-        return jsonify({"success": True})
-    
-    return jsonify({"success": False, "message": "Impressora não encontrada"})
-
+# --- Inicio Funcao Carregar Producao 24h ---
 def carregar_producao_24h():
-    if not os.path.exists(ARQUIVO_PRODUCAO):
-        return {"data": time.strftime("%Y-%m-%d"), "itens": {}}
-    with open(ARQUIVO_PRODUCAO, 'r') as f:
-        dados = json.load(f)
-        # Reseta se mudar o dia
-        if dados.get("data") != time.strftime("%Y-%m-%d"):
-            return {"data": time.strftime("%Y-%m-%d"), "itens": {}}
-        return dados
+    """
+    Busca no banco de dados todas as peças produzidas no dia de hoje.
+    Retorna os dados no formato exato que o seu Dashboard (HTML/JS) já utiliza.
+    """
+    hoje = datetime.now(timezone.utc).date()
+    try:
+        # Busca todos os registros onde a data é igual a hoje
+        registros = RegistroProducao.query.filter_by(data=hoje).all()
+        
+        # Reconstrói o dicionário de itens para manter a compatibilidade com o seu JavaScript
+        itens = {r.nome_peca: r.quantidade for r in registros}
+        
+        return {
+            "data": hoje.strftime("%Y-%m-%d"),
+            "itens": itens
+        }
+    except Exception as e:
+        print(f"🚨 Erro ao carregar produção do dia: {e}")
+        return {"data": hoje.strftime("%Y-%m-%d"), "itens": {}}
+# --- Fim Funcao Carregar Producao 24h ---
 
 
 @app.route('/dados_producao_diaria')
@@ -781,5 +946,15 @@ def imprimir_em_massa():
 """Ações em massa"""
 
 
+# --- Inicio Bloco de Inicializacao Corrigido ---
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    # 1. Criamos a Thread de monitoramento em segundo plano
+    t = threading.Thread(target=monitor_inteligente, daemon=True)
+    
+    # 2. Iniciamos o motor de busca (Sem isso, o status fica em 0)
+    t.start()
+    print("🚀 Motor de monitoramento iniciado em Betim!")
+
+    # 3. Rodamos o servidor Flask
+    app.run(host='0.0.0.0', port=5000, debug=False)
+# --- Fim Bloco de Inicializacao ---

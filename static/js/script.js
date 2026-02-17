@@ -22,72 +22,77 @@ let nomeImpressoraSelecionada = ''; // Para usar na confirmação de exclusão
 
 
 /* =========================================================
-   1) MONITORAMENTO GERAL (GRID + WIDGETS)
-========================================================= */
+   1) MONITORAMENTO GERAL (GRID + WIDGETS) - VERSÃO LIMPA
+   ========================================================= */
 function atualizarStatusInstantaneo() {
     if (isPollingPaused) return;
 
-    // --- Status Geral / Grid ---
+    // 1. Busca o sinal de estado atualizado do servidor Python
     fetch('/status_atualizado')
         .then(r => r.json())
         .then(data => {
+            // Atualiza o contador de máquinas prontas no widget superior
             const countDispEl = document.getElementById('countDisp');
-            if (countDispEl) countDispEl.innerText = data.total_disponiveis;
+            if (countDispEl) {
+                countDispEl.innerText = data.total_disponiveis;
+            }
 
             const listaAtiva = document.getElementById('listaProducaoAtiva');
-            let htmlLista = '';
+            let htmlListaAtiva = '';
             let temAlguemImprimindo = false;
 
-            Object.entries(data.impressoras).forEach(([ip, dados]) => {
-                const card = document.querySelector(`.card-pro[onclick*="${ip}"]`);
-                if (!card) return;
+            // Percorre cada impressora enviada pelo sinal do servidor
+            Object.entries(data.impressoras || {}).forEach(([ip, dados]) => {
+                // Tenta encontrar o card pelo ID único ou pelo seletor de IP
+                const idLimpo = ip.split('.').join('-');
+                const card = document.getElementById(`card-${idLimpo}`) || 
+                             document.querySelector(`.card-pro[onclick*="${ip}"]`);
+                
+                if (!card) return; 
 
-                // Atualiza cor do card
+                // Ajusta a cor do card (ready, printing, offline) e o texto de status
                 card.className = `card-pro ${dados.cor}`;
-
-                // Atualiza texto status
                 const statusTxt = card.querySelector('.status-text');
-                if (statusTxt) statusTxt.innerText = dados.msg;
+                if (statusTxt) {
+                    statusTxt.innerText = dados.msg;
+                }
 
-                // Progresso
-                const infoDiv = card.querySelector('.progress-area');
-                if (!infoDiv) return;
-
-                if (['printing', 'paused'].includes(dados.status)) {
-                    infoDiv.style.display = 'block';
-
-                    const barra = card.querySelector('.barra-progresso');
-                    if (barra) barra.style.width = dados.progresso + '%';
-
-                    const pctVal = card.querySelector('.pct-val');
-                    if (pctVal) pctVal.innerText = dados.progresso + '%';
-
-                    temAlguemImprimindo = true;
-
-                    // Lista de produção
-                    const nomeLimpo = (dados.arquivo || '')
-                        .replace('.gcode', '')
-                        .replace('.bgcode', '');
-
-                    htmlLista += `
-                        <li>
-                            <span class="printer-name">${dados.nome}</span>
-                            <span class="file-name">${nomeLimpo}</span>
-                        </li>
-                    `;
-                } else {
-                    infoDiv.style.display = 'none';
+                // Gerencia a exibição da barra de progresso em tempo real
+                const progressArea = card.querySelector('.progress-area');
+                if (progressArea) {
+                    if (['printing', 'paused'].includes(dados.status)) {
+                        progressArea.style.display = 'block';
+                        
+                        const fill = card.querySelector('.barra-progresso');
+                        const pctVal = card.querySelector('.pct-val');
+                        
+                        if (fill) fill.style.width = dados.progresso + '%';
+                        if (pctVal) pctVal.innerText = dados.progresso + '%';
+                        
+                        // Alimenta a lista da 'Linha de Produção'
+                        temAlguemImprimindo = true;
+                        const nomeLimpo = (dados.arquivo || '').replace('.gcode', '').replace('.bgcode', '');
+                        htmlListaAtiva += `
+                            <li>
+                                <span class="printer-name">${dados.nome}</span>
+                                <span class="file-name">${nomeLimpo}</span>
+                            </li>`;
+                    } else {
+                        progressArea.style.display = 'none';
+                    }
                 }
             });
 
+            // Renderiza a lista de produção no widget
             if (listaAtiva) {
-                listaAtiva.innerHTML = temAlguemImprimindo
-                    ? htmlLista
+                listaAtiva.innerHTML = temAlguemImprimindo 
+                    ? htmlListaAtiva 
                     : '<li class="empty-msg">Nenhuma colmeia em produção</li>';
             }
-        });
+        })
+        .catch(() => {}); // Falha silenciosa para produção
 
-    // --- Produção diária (Concluídos 24h) ---
+    // 2. Busca o resumo da produção diária (Concluídos 24h)
     fetch('/dados_producao_diaria')
         .then(r => r.json())
         .then(producao => {
@@ -100,16 +105,13 @@ function atualizarStatusInstantaneo() {
                     <li>
                         <span class="printer-name">${nome}</span>
                         <span class="file-name">Qtd: ${qtd}</span>
-                    </li>
-                `;
+                    </li>`;
             });
-
+            
             listaConcluida.innerHTML = htmlConcluido || '<li class="empty-msg">Aguardando finalizações...</li>';
-        });
+        })
+        .catch(() => {});
 }
-/* =========================================================
-   /1) MONITORAMENTO GERAL (GRID + WIDGETS)
-========================================================= */
 
 
 /* =========================================================
@@ -145,58 +147,85 @@ function confirmarExclusaoImpressora() {
     }
 }
 
-function imprimirArquivoBiblioteca(arquivoRelativo){
-  if (!impressoraSelecionada) {
-    alert("Selecione uma impressora primeiro.");
-    return;
-  }
-
-  fetch('/imprimir', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ ip: impressoraSelecionada, arquivo: arquivoRelativo })
-  })
-  .then(async r => {
-    const text = await r.text();
-    let json; try { json = JSON.parse(text); } catch { json = null; }
-    if (!r.ok) throw new Error(json?.message || text || `HTTP ${r.status}`);
-    return json;
-  })
-  .then(res => {
-    alert("✅ Enviado para fila!");
-    fecharModal();
-  })
-  .catch(err => alert("❌ Erro: " + err.message));
-}
-
-function imprimirArquivoInterno(filename){
-  if (!impressoraSelecionada) {
-    alert("Selecione uma impressora primeiro.");
-    return;
-  }
-
-  fetch('/api/imprimir_interno', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ ip: impressoraSelecionada, filename })
-  })
-  .then(async r => {
-    const text = await r.text();
-    let json; try { json = JSON.parse(text); } catch { json = null; }
-    if (!r.ok) throw new Error(json?.message || text || `HTTP ${r.status}`);
-    return json;
-  })
-  .then(res => {
-    if (res.success) {
-      alert("✅ Impressão iniciada (arquivo interno)!");
-      fecharModal();
-    } else {
-      alert("❌ " + (res.message || "Erro"));
+function imprimirArquivoBiblioteca(arquivoRelativo) {
+    if (!impressoraSelecionada) {
+        alert("Selecione uma impressora primeiro.");
+        return;
     }
-  })
-  .catch(err => alert("❌ Erro: " + err.message));
+
+    // Feedback visual de carregamento no botão
+    const btn = event.target;
+    const textoOriginal = btn.innerText;
+    btn.innerText = "ENVIANDO...";
+    btn.disabled = true;
+
+    fetch('/api/imprimir_biblioteca', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip: impressoraSelecionada, arquivo: arquivoRelativo })
+    })
+    .then(r => r.json())
+    .then(res => {
+        if (res.success) {
+            // Sucesso: Fecha a modal para ver o progresso no card
+            fecharModal();
+        } else {
+            alert("❌ Erro: " + res.message);
+            btn.innerText = textoOriginal;
+            btn.disabled = false;
+        }
+    })
+    .catch(() => {
+        alert("🚨 Erro de conexão com o servidor de Betim.");
+        btn.innerText = textoOriginal;
+        btn.disabled = false;
+    });
 }
 
+/* =========================================================
+   4) ARQUIVOS INTERNOS - INICIAR PRODUÇÃO COM FEEDBACK
+   ========================================================= */
+function imprimirArquivoInterno(filename){
+    if (!impressoraSelecionada) {
+        alert("Selecione uma impressora primeiro.");
+        return;
+    }
+
+    // 1. Feedback visual imediato no botão
+    // O 'event.target' identifica qual botão de 'IMPRIMIR' você clicou na lista
+    const btn = event.target;
+    const textoOriginal = btn.innerText;
+    
+    btn.innerText = "INICIANDO...";
+    btn.disabled = true;
+    btn.style.opacity = "0.6";
+
+    fetch('/api/imprimir_interno', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ ip: impressoraSelecionada, filename })
+    })
+    .then(async r => {
+        const res = await r.json();
+        if (res.success) {
+            // Sucesso real: Mostra alerta e fecha o Command Center
+            alert(`✅ Sucesso: ${res.message}`);
+            fecharModal();
+        } else {
+            // Se o Python retornar erro (ex: arquivo corrompido)
+            throw new Error(res.message || "Erro no Klipper");
+        }
+    })
+    .catch(err => {
+        // Trata erros de rede ou timeout (comum em Betim)
+        alert("❌ Erro: " + err.message);
+        
+        // Restaura o botão caso dê erro para você tentar de novo
+        btn.innerText = textoOriginal;
+        btn.disabled = false;
+        btn.style.opacity = "1";
+    });
+}
 
 
 /** Remove impressora no backend */
@@ -313,107 +342,73 @@ function fecharModal() {
 /* =========================================================
    3) ARQUIVOS (BIBLIOTECA CENTRAL / NAVEGAÇÃO / SELEÇÃO)
 ========================================================= */
+/* =========================================================
+   3) BIBLIOTECA CENTRAL - NAVEGAÇÃO E ESTILIZAÇÃO UNIFICADA
+   ========================================================= */
 function carregarPasta(caminho) {
-  fetch('/navegar', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pasta: caminho })
-  })
-  .then(r => r.json())
-  .then(dados => {
-    pastaAtual = dados.atual || '';
-
     const ul = document.getElementById('listaGcodes');
     if (!ul) return;
 
-    ul.innerHTML = '';
+    ul.innerHTML = '<li class="loading-state">Acessando arquivos do servidor...</li>';
 
-    const caminhoEl = document.getElementById('caminhoAtual');
-    if (caminhoEl) caminhoEl.innerText = pastaAtual || 'Raiz';
+    fetch('/navegar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pasta: caminho })
+    })
+    .then(r => r.json())
+    .then(dados => {
+        pastaAtual = dados.atual || '';
+        ul.innerHTML = '';
 
-    const btnVoltar = document.getElementById('btnVoltar');
-    if (btnVoltar) btnVoltar.disabled = (pastaAtual === '');
+        const caminhoEl = document.getElementById('caminhoAtual');
+        if (caminhoEl) caminhoEl.innerText = pastaAtual || 'Raiz';
 
-    // ============================
-    // Pastas (clicável)
-    // ============================
-    (dados.pastas || []).forEach(p => {
-      const li = document.createElement('li');
-      li.className = 'internal-file-item';
+        const btnVoltar = document.getElementById('btnVoltar');
+        if (btnVoltar) btnVoltar.disabled = (pastaAtual === '');
 
-      li.innerHTML = `
-        <div class="file-info">
-          <strong class="file-name-text">📁 ${p}</strong>
-          <small class="file-size-tag">Pasta</small>
-        </div>
-        <button class="btn-print-internal" type="button">ABRIR</button>
-      `;
+        // Renderiza Pastas (Estilo Memória Interna)
+        dados.pastas.forEach(p => {
+            const li = document.createElement('li');
+            li.className = 'internal-file-item';
+            li.innerHTML = `
+                <div class="file-info">
+                    <strong class="file-name-text">📁 ${p.nome}</strong>
+                    <small class="file-size-tag">Diretório</small>
+                </div>
+                <button class="btn-print-internal" onclick="carregarPasta('${pastaAtual ? pastaAtual + '/' + p.nome : p.nome}')">ABRIR</button>
+            `;
+            ul.appendChild(li);
+        });
 
-      li.querySelector('button').onclick = () => {
-        const next = pastaAtual ? `${pastaAtual}/${p}` : p;
-        carregarPasta(next);
-      };
+        // Renderiza Arquivos (Estilo Memória Interna com Trava de Extensão)
+        dados.arquivos.forEach(f => {
+            const isGcode = f.nome.toLowerCase().endsWith('.gcode') || f.nome.toLowerCase().endsWith('.bgcode');
+            const rel = pastaAtual ? `${pastaAtual}/${f.nome}` : f.nome;
+            
+            const li = document.createElement('li');
+            li.className = 'internal-file-item';
+            li.innerHTML = `
+                <div class="file-info">
+                    <strong class="file-name-text">${f.nome}</strong>
+                    <small class="file-size-tag">${f.tamanho} MB</small>
+                </div>
+                <button class="btn-print-internal" 
+                        ${isGcode ? '' : 'disabled style="opacity: 0.3; cursor: not-allowed;"'}
+                        onclick="imprimirArquivoBiblioteca('${rel}')">
+                    ${isGcode ? 'IMPRIMIR' : 'SÓ GCODE'}
+                </button>
+            `;
+            ul.appendChild(li);
+        });
 
-      ul.appendChild(li);
+        if (dados.pastas.length === 0 && dados.arquivos.length === 0) {
+            ul.innerHTML = '<li class="empty-msg">Pasta vazia</li>';
+        }
+    })
+    .catch(() => {
+        ul.innerHTML = '<li class="error-msg">Erro ao carregar arquivos do servidor.</li>';
     });
-
-    // ============================
-    // Arquivos (qualquer extensão)
-    // ============================
-    (dados.arquivos || []).forEach(arqObj => {
-      // compat: se backend ainda manda string, trata como string
-      const nomeArquivo = (typeof arqObj === 'string') ? arqObj : (arqObj.nome || arqObj.name || '');
-      const tamanhoBytes = (typeof arqObj === 'object') ? (arqObj.tamanho_bytes || arqObj.size || null) : null;
-
-      if (!nomeArquivo) return;
-
-      const arqLower = nomeArquivo.toLowerCase();
-      const isGcode = arqLower.endsWith('.gcode') || arqLower.endsWith('.bgcode');
-
-      const rel = pastaAtual ? `${pastaAtual}/${nomeArquivo}` : nomeArquivo;
-
-      // tag de tamanho (se vier do backend)
-      let tagInfo = 'Biblioteca';
-      if (tamanhoBytes && !isNaN(tamanhoBytes)) {
-        const mb = (tamanhoBytes / 1024 / 1024).toFixed(1);
-        tagInfo = `${mb} MB`;
-      }
-
-      const li = document.createElement('li');
-      li.className = 'internal-file-item';
-
-      li.innerHTML = `
-        <div class="file-info">
-          <strong class="file-name-text">${nomeArquivo}</strong>
-          <small class="file-size-tag">${tagInfo}</small>
-        </div>
-        <button class="btn-print-internal" type="button">
-          ${isGcode ? 'IMPRIMIR' : 'NÃO IMPRIMÍVEL'}
-        </button>
-      `;
-
-      const btn = li.querySelector('button');
-      btn.disabled = !isGcode;
-      btn.style.opacity = isGcode ? '1' : '0.45';
-      btn.style.cursor = isGcode ? 'pointer' : 'not-allowed';
-
-      btn.onclick = () => {
-        if (!isGcode) return;
-        imprimirArquivoBiblioteca(rel);
-      };
-
-      ul.appendChild(li);
-    });
-
-    if ((dados.pastas || []).length === 0 && (dados.arquivos || []).length === 0) {
-      ul.innerHTML = `<li class="empty-msg">Nenhum arquivo encontrado nesta pasta.</li>`;
-    }
-  })
-  .catch(err => {
-    console.error("Erro ao carregar pasta:", err);
-    const ul = document.getElementById('listaGcodes');
-    if (ul) ul.innerHTML = `<li class="error-msg">Erro ao abrir biblioteca.</li>`;
-  });
 }
 
 

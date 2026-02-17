@@ -654,7 +654,7 @@ body {
 }
 .internal-file-item:hover {
     background: rgba(255, 255, 255, 0.05);
-    border-color: rgba(46, 204, 113, 0.3);
+    border-color: #ff6d00;
 }
 
 .file-name-text {
@@ -670,7 +670,7 @@ body {
 }
 /* O BOTÃO "IMPRIMIR" TURBINADO */
 .btn-print-internal {
-    background: #2ecc71; /* Verde de Sucesso */
+    background: #ff6d00; /* Verde de Sucesso */
     color: #0a0a0b;
     border: none;
     padding: 8px 16px;
@@ -680,12 +680,12 @@ body {
     letter-spacing: 0.5px;
     cursor: pointer;
     transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: 0 4px 12px rgba(46, 204, 113, 0.2);
+    box-shadow: 0 4px 12px #ff6d00;
 }
 .btn-print-internal:hover {
-    background: #27ae60;
+    background: #ff6d00;
     transform: translateY(-2px);
-    box-shadow: 0 6px 15px rgba(46, 204, 113, 0.4);
+    box-shadow: 0 6px 15px #ff6d00;
 }
 .btn-print-internal:active {
     transform: translateY(0);

@@ -292,7 +292,7 @@
                 <div class="grid-responsive">
 
                     {% for ip, dados in impressoras.items() %}
-                    <section class="card-pro {{ dados.cor }}" onclick="abrirModal('{{ ip }}', '{{ dados.nome }}')">
+                    <section id="card-{{ ip | replace('.', '-') }}" class="card-pro {{ dados.cor }}" onclick="abrirModal('{{ ip }}', '{{ dados.nome }}')">
 
                         
 
@@ -594,9 +594,7 @@
                                 </div>
                             </div>
 
-                            <button id="btnEnviar" class="btn-primary-dashboard big" disabled>
-                                SELECIONE UM ARQUIVO
-                            </button>
+                            
                         </div>
                         <!-- /Biblioteca central -->
 
