@@ -620,26 +620,21 @@ def garantir_fila(ip):
             t.start()
 
 def worker_upload(ip):
-    """
-    Processa uploads 1 por vez para esse IP.
-    """
     fila = UPLOAD_FILAS[ip]
     while True:
-        job = fila.get()  # bloqueia até chegar item
-        if job is None:
-            fila.task_done()
-            break
+        job = fila.get()
+        if job is None: break
 
         caminho = job.get("caminho")
         nome_exib = job.get("arquivo_label", os.path.basename(caminho))
 
-        # mostra status de fila -> enviando
-        PROGRESSO_UPLOAD[ip] = {"p": 0, "msg": f"Na fila: {nome_exib}"}
+        # ✅ MELHORIA: Garante que o progresso comece em 1% para o JS detectar atividade
+        PROGRESSO_UPLOAD[ip] = {"p": 1, "msg": f"Iniciando: {nome_exib}"}
 
         try:
             tarefa_upload(ip, caminho)
-        except Exception:
-            PROGRESSO_UPLOAD[ip] = {"p": -1, "msg": "Erro de Rede"}
+        except Exception as e:
+            PROGRESSO_UPLOAD[ip] = {"p": -1, "msg": f"Erro: {str(e)[:30]}"}
         finally:
             fila.task_done()
 
@@ -663,40 +658,34 @@ def enfileirar_impressao(ip, caminho_completo, arquivo_label=None):
 # --- LÓGICA DE UPLOAD ---
 def tarefa_upload(ip_alvo, caminho_completo):
     nome_arquivo = os.path.basename(caminho_completo)
-
     try:
-        # ocupa 1 "slot" global de upload
         with UPLOAD_SEM:
-            PROGRESSO_UPLOAD[ip_alvo] = {"p": 1, "msg": "Enviando arquivo..."}
+            # ✅ Status intermediário claro
+            PROGRESSO_UPLOAD[ip_alvo] = {"p": 5, "msg": "Conectando à Neptune..."}
 
             with open(caminho_completo, 'rb') as f:
                 monitor = Monitor(f, ip_alvo)
                 files = {'file': (nome_arquivo, monitor)}
-
+                
+                # Aumentamos o timeout para gcodes pesados de Betim
                 resp = SESSAO_REDE.post(
                     f"http://{ip_alvo}/server/files/upload",
                     files=files,
-                    timeout=900
+                    timeout=1200 
                 )
                 resp.raise_for_status()
 
-        time.sleep(1.0)
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": 95, "msg": "Iniciando..."}
-
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": 95, "msg": "Processando no Klipper..."}
+        
+        # Comando de início
         nome_url = urllib.parse.quote(nome_arquivo)
-        try:
-            SESSAO_REDE.post(
-                f"http://{ip_alvo}/printer/print/start?filename={nome_url}",
-                timeout=10
-            )
-        except:
-            pass
+        SESSAO_REDE.post(f"http://{ip_alvo}/printer/print/start?filename={nome_url}", timeout=5)
 
-        time.sleep(0.5)
+        # ✅ NÃO APAGUE O STATUS IMEDIATAMENTE
         PROGRESSO_UPLOAD[ip_alvo] = {"p": 100, "msg": "Sucesso!"}
-
+        
     except Exception as e:
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": f"Erro: {str(e)[:60]}"}
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": "Falha no envio"}
 
 
 

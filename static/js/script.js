@@ -523,9 +523,12 @@ function recuperarEstadoUploads() {
     });
 }
 
-/** Isola monitoramento para reutilizar */
 function iniciarMonitoramentoUpload(ip, idLimpo) {
+    // Se já existe um monitor para este IP, limpa para não duplicar
     if (uploadsAtivos[ip]) clearInterval(uploadsAtivos[ip]);
+
+    const loader = document.getElementById(`loader-${idLimpo}`);
+    if (loader) loader.style.display = 'flex';
 
     uploadsAtivos[ip] = setInterval(() => {
         fetch(`/progresso_transmissao/${ip}`)
@@ -533,16 +536,23 @@ function iniciarMonitoramentoUpload(ip, idLimpo) {
             .then(d => {
                 const fill = document.getElementById(`fill-${idLimpo}`);
                 const pct = document.getElementById(`pct-${idLimpo}`);
+                const msg = document.querySelector(`#loader-${idLimpo} .status-msg`); // Adicione uma span para msgs se quiser
 
                 if (fill) fill.style.width = d.p + '%';
                 if (pct) pct.innerText = d.p + '%';
+                if (msg) msg.innerText = d.msg;
 
-                if (d.p >= 100) {
+                // Só para o monitoramento se chegar em 100 ou erro (-1)
+                if (d.p >= 100 || d.p === -1) {
                     clearInterval(uploadsAtivos[ip]);
-                    finalizarVisualUpload(idLimpo);
+                    setTimeout(() => finalizarVisualUpload(idLimpo), 2000);
                 }
+            })
+            .catch(() => {
+                // Se falhar o fetch, não para imediatamente, tenta de novo no próximo ciclo
+                console.warn("Aguardando resposta do monitor de upload...");
             });
-    }, 800);
+    }, 1000); // 1 segundo é suficiente para não sobrecarregar o servidor de Betim
 }
 
 function finalizarVisualUpload(idLimpo) {
