@@ -238,40 +238,44 @@ def salvar_tokens(tokens):
 
 
 
-# 2. Lógica de Renovação Automática (OAuth 2.0)
-def garantir_token_valido():
-
-    print("TOKENS_PATH =", TOKENS_PATH)
-    print("EXISTE tokens?", os.path.exists(TOKENS_PATH))
-    """Garante que qualquer dispositivo sempre tenha um token funcional"""
+# 2. Lógica de Renovação Automática (OAuth 2.0) - VERSÃO CORRIGIDA
+def garantir_token_valido(forcar_renovacao=False):
     tokens = carregar_tokens()
-    print("TOKENS carregados keys:", list(tokens.keys()) if tokens else "VAZIO")
     if not tokens:
         raise Exception("Nenhum token encontrado. Acesse /login_bling primeiro.")
 
     agora = time.time()
-    # Se o token expira em menos de 5 minutos, renova
-    if agora > (tokens.get('expires_at', 0) - 300):
+    # ✅ CORREÇÃO: Renova se o tempo expirou OU se o sistema forçar (após erro 401)
+    if forcar_renovacao or agora > (tokens.get('expires_at', 0) - 300):
         print("🔄 Renovando acesso para múltiplos dispositivos...")
         url = "https://www.bling.com.br/Api/v3/oauth/token"
+        
         payload = {
             "grant_type": "refresh_token",
             "refresh_token": tokens['refresh_token']
         }
         
-        response = requests.post(url, data=payload, auth=(CLIENT_ID, CLIENT_SECRET))
-        
-        if response.status_code == 200:
-            novos_dados = response.json()
-            tokens['access_token'] = novos_dados['access_token']
-            tokens['refresh_token'] = novos_dados.get('refresh_token', tokens['refresh_token'])
-            tokens['expires_at'] = agora + novos_dados['expires_in']
-            salvar_tokens(tokens)
-            print("✅ Token renovado globalmente!")
-        else:
-            print(f"🚨 Erro na renovação: {response.text}")
+        # O Bling exige o Client ID e Secret via Basic Auth ou no Payload
+        try:
+            response = requests.post(url, data=payload, auth=(CLIENT_ID, CLIENT_SECRET), timeout=10)
+            
+            if response.status_code == 200:
+                novos_dados = response.json()
+                tokens['access_token'] = novos_dados['access_token']
+                # ✅ IMPORTANTE: O Bling pode mandar um novo refresh_token, você deve salvar!
+                tokens['refresh_token'] = novos_dados.get('refresh_token', tokens['refresh_token'])
+                tokens['expires_at'] = agora + novos_dados['expires_in']
+                salvar_tokens(tokens)
+                print("✅ Token renovado com sucesso!")
+            else:
+                # 🚨 Se a renovação falhar, o refresh_token morreu. Precisa de login manual.
+                print(f"🚨 Refresh Token expirou ou é inválido: {response.text}")
+                return None 
+        except Exception as e:
+            print(f"🚨 Falha de rede na renovação: {e}")
+            return None
     
-    return tokens['access_token']
+    return tokens.get('access_token')
 
 # 3. Busca de Estoque com Cache de 5 Minutos
 def buscar_estoque_bling(headers):
@@ -350,23 +354,25 @@ def callback():
 def pegar_estoque():
     try:
         token = garantir_token_valido()
-
-        print("DEBUG /api/estoque_bling -> token (inicio):", token[:12], "...")  # não imprime tudo
         headers = {"Authorization": f"Bearer {token}"}
-
         url = "https://www.bling.com.br/Api/v3/produtos?estoque=S"
+        
         response = requests.get(url, headers=headers, timeout=10)
 
-        print("DEBUG /api/estoque_bling -> status:", response.status_code)
-        print("DEBUG /api/estoque_bling -> body:", response.text[:300])
+        # ✅ SEGUNDA CHANCE: Se der 401, força a renovação e tenta de novo
+        if response.status_code == 401:
+            print("⚠️ Token rejeitado (401). Forçando renovação...")
+            novo_token = garantir_token_valido(forcar_renovacao=True)
+            if novo_token:
+                headers = {"Authorization": f"Bearer {novo_token}"}
+                response = requests.get(url, headers=headers, timeout=10)
 
         if response.status_code == 200:
             return jsonify(response.json())
         else:
-            return jsonify({"error": "Erro na comunicação com o Bling", "details": response.text}), response.status_code
+            return jsonify({"error": "Erro no Bling", "details": response.text}), response.status_code
 
     except Exception as e:
-        print("DEBUG /api/estoque_bling -> exception:", str(e))
         return jsonify({"error": str(e)}), 500
 
 
