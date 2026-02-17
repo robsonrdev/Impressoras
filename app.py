@@ -23,7 +23,6 @@ app = Flask(__name__)
 
 # --- CONFIGURAÇÕES ---
 PASTA_RAIZ = os.path.abspath(r'/app/gcodes') 
-ARQUIVO_BANCO = 'impressores.json' 
 
 basedir = os.path.abspath(os.path.dirname(__file__))
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'farm_supertech.db')
@@ -105,16 +104,14 @@ def chave_ordem_maquina(m):
 # --- Fim Funcao Auxiliar de Ordenacao ---
 
 # Se detectar Windows (Seu VS Code), usa a unidade Z: mapeada
-# Se for Linux (Servidor em Betim), usa o caminho interno original
 if platform.system() == "Windows":
-    PASTA_RAIZ = os.path.abspath(r'Z:\\')
-    print(f"💻 MODO DESENVOLVIMENTO: Acessando gcodes em {PASTA_RAIZ}")
+    # Caminho para o seu VS Code (Unidade Z: mapeada no IP .172)
+    PASTA_RAIZ = os.path.abspath(r'Z:\\') 
+    print(f"💻 MODO TESTE: Acessando gcodes via Rede em {PASTA_RAIZ}")
 else:
-    PASTA_RAIZ = os.path.abspath(r'/app/gcodes')
+    # ✅ CAMINHO REAL DO SERVIDOR UBUNTU
+    PASTA_RAIZ = '/srv/samba/empresa/gcodes' 
     print(f"🚀 MODO PRODUÇÃO: Acessando gcodes localmente em {PASTA_RAIZ}")
-
-ARQUIVO_BANCO = 'impressores.json' 
-# --- FIM DAS CONFIGURAÇÕES ---
 
 # --- Inicio Funcao Carregar Maquinas ---
 def carregar_maquinas():
