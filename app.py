@@ -103,12 +103,17 @@ def chave_ordem_maquina(m):
     return 999999  
 # --- Fim Funcao Auxiliar de Ordenacao ---
 
+# Define o caminho de acordo com o sistema operacional
 if platform.system() == "Windows":
-    # Modo Dev: Seu VS Code acessando via unidade Z: (IP .172)
-    PASTA_RAIZ = os.path.abspath(r'Z:\\') 
+    # Modo Dev: Unidade Z: mapeada (IP .172)
+    PASTA_RAIZ = os.path.normpath(r'Z:/')
 else:
-    # Modo Produção: Caminho real extraído do seu servidor Ubuntu
+    # Modo Produção: Caminho real do Samba no Ubuntu
     PASTA_RAIZ = '/srv/samba/empresa/gcodes'
+
+# Força o Python a validar se a pasta existe antes de começar
+if not os.path.exists(PASTA_RAIZ):
+    print(f"🚨 ERRO CRÍTICO: A pasta {PASTA_RAIZ} não foi encontrada no servidor!")
     
 # --- Inicio Funcao Carregar Maquinas ---
 def carregar_maquinas():
@@ -768,46 +773,60 @@ def progresso_transmissao(ip):
 @app.route('/navegar', methods=['POST'])
 def navegar():
     try:
+        # 1. Validação dos dados recebidos
         dados = request.json or {}
-        # Garante que o caminho seja limpo de barras invertidas do Windows
-        subpasta = (dados.get('pasta') or '').strip().replace('\\', '/').strip('/')
+        subpasta = str(dados.get('pasta') or '').strip().replace('\\', '/').strip('/')
         
-        caminho_alvo = os.path.abspath(os.path.join(PASTA_RAIZ, subpasta))
+        # 2. Construção do caminho absoluto
+        # Isso evita que o Python se confunda com pastas relativas
+        caminho_alvo = os.path.normpath(os.path.join(PASTA_RAIZ, subpasta))
         
-        # Trava de segurança para não sair da pasta gcodes
-        if not caminho_alvo.startswith(os.path.abspath(PASTA_RAIZ)):
-            return jsonify({"error": "Acesso Negado"}), 403
+        # 3. Trava de Segurança (Não permite sair da pasta empresa/gcodes)
+        raiz_abs = os.path.abspath(PASTA_RAIZ)
+        alvo_abs = os.path.abspath(caminho_alvo)
+        
+        if not alvo_abs.startswith(raiz_abs):
+            return jsonify({"error": "Acesso Negado: Tentativa de sair da raiz"}), 403
 
-        itens = os.listdir(caminho_alvo)
+        # 4. Listagem dos itens
+        if not os.path.exists(alvo_abs):
+            return jsonify({"atual": subpasta, "pastas": [], "arquivos": [], "msg": "Pasta não encontrada"}), 200
+
+        itens = os.listdir(alvo_abs)
         pastas, arquivos = [], []
 
         for nome in itens:
-            # Ignora arquivos ocultos e do sistema
-            if nome.startswith('.') or nome in ['Thumbs.db', '.DS_Store']: 
+            if nome.startswith('.') or nome in ['Thumbs.db', '.DS_Store']:
                 continue
             
-            full_path = os.path.join(caminho_alvo, nome)
+            full_path = os.path.join(alvo_abs, nome)
             
-            if os.path.isdir(full_path):
-                pastas.append({"nome": nome, "tipo": "pasta"})
-            else:
-                # Pega o tamanho em MB para a tag de estilização
-                stats = os.stat(full_path)
-                tamanho = round(stats.st_size / (1024 * 1024), 1)
-                arquivos.append({
-                    "nome": nome, 
-                    "tipo": "arquivo", 
-                    "tamanho": f"{tamanho} MB"
-                })
+            try:
+                if os.path.isdir(full_path):
+                    pastas.append({"nome": nome, "tipo": "pasta"})
+                else:
+                    # Tenta pegar o tamanho do arquivo
+                    tamanho_bytes = os.path.getsize(full_path)
+                    tamanho_mb = round(tamanho_bytes / (1024 * 1024), 1)
+                    arquivos.append({
+                        "nome": nome, 
+                        "tipo": "arquivo", 
+                        "tamanho": f"{tamanho_mb} MB"
+                    })
+            except Exception as e:
+                print(f"⚠️ Erro ao ler item {nome}: {e}")
+                continue # Pula arquivos problemáticos
 
         return jsonify({
             "atual": subpasta,
             "pastas": sorted(pastas, key=lambda x: x['nome']),
             "arquivos": sorted(arquivos, key=lambda x: x['nome'])
         })
+
     except Exception as e:
-        # Retorna o erro exato caso o Python não consiga ler a pasta
-        return jsonify({"error": f"Erro de leitura: {str(e)}"}), 500
+        # Se chegar aqui, o erro será exibido no JSON em vez de dar tela de erro 500
+        print(f"🚨 Falha na Rota Navegar: {str(e)}")
+        return jsonify({"error": f"Erro interno no servidor: {str(e)}"}), 500
     
 
 @app.route('/api/arquivos_internos/<ip>')
