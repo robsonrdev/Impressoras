@@ -103,16 +103,13 @@ def chave_ordem_maquina(m):
     return 999999  
 # --- Fim Funcao Auxiliar de Ordenacao ---
 
-# Se detectar Windows (Seu VS Code), usa a unidade Z: mapeada
 if platform.system() == "Windows":
-    # Caminho para o seu VS Code (Unidade Z: mapeada no IP .172)
+    # Modo Dev: Seu VS Code acessando via unidade Z: (IP .172)
     PASTA_RAIZ = os.path.abspath(r'Z:\\') 
-    print(f"💻 MODO TESTE: Acessando gcodes via Rede em {PASTA_RAIZ}")
 else:
-    # ✅ CAMINHO REAL DO SERVIDOR UBUNTU
-    PASTA_RAIZ = '/srv/samba/empresa/gcodes' 
-    print(f"🚀 MODO PRODUÇÃO: Acessando gcodes localmente em {PASTA_RAIZ}")
-
+    # Modo Produção: Caminho real extraído do seu servidor Ubuntu
+    PASTA_RAIZ = '/srv/samba/empresa/gcodes'
+    
 # --- Inicio Funcao Carregar Maquinas ---
 def carregar_maquinas():
     """
@@ -562,24 +559,26 @@ def verificar_ip(ip, nome_personalizado):
 # --- Fim Funcao verificar_ip ---
 
 
-# --- 2) Rota Imprimir Biblioteca (Arquivos do Servidor/Notebook) ---
 @app.route('/api/imprimir_biblioteca', methods=['POST'])
 def imprimir_biblioteca():
-    """Enfileira um arquivo da biblioteca para upload e impressão na Neptune"""
+    """Enfileira um arquivo da biblioteca para upload e impressão"""
     dados = request.json or {}
     ip = dados.get('ip')
     arquivo = (dados.get('arquivo') or '').strip().replace("\\", "/").lstrip("/")
 
     if not ip or not arquivo:
-        return jsonify({"success": False, "message": "IP ou Arquivo ausentes"}), 400
+        return jsonify({"success": False, "message": "Dados incompletos"}), 400
 
     caminho = os.path.abspath(os.path.join(PASTA_RAIZ, arquivo))
+    
     if not os.path.exists(caminho):
-        return jsonify({"success": False, "message": "Arquivo não localizado no servidor"}), 404
+        return jsonify({"success": False, "message": "Arquivo físico não encontrado"}), 404
 
-    # Envia para a fila de transmissão com o semáforo de 1 por vez
+    # Envia para a lógica de enfileiramento (Queue) que já funciona no seu app
     enfileirar_impressao(ip, caminho, arquivo_label=os.path.basename(caminho))
-    return jsonify({"success": True, "message": "Arquivo enfileirado para envio!"})
+    return jsonify({"success": True, "message": "Na fila de transmissão!"})
+
+
 
 # --- Monitor Inteligente (Limpo) ---
 def monitor_inteligente():
@@ -765,41 +764,40 @@ def progresso_transmissao(ip):
 
 
 # --- 1) Rota Navegar (Acesso a Pastas e Arquivos com Tamanho) ---
+# --- Rota Navegar (Blindada e com Metadados) ---
 @app.route('/navegar', methods=['POST'])
 def navegar():
-    """Lista pastas e arquivos da Biblioteca Central com metadados de tamanho"""
-    dados = request.json or {}
-    # Limpa o caminho para evitar erros de barra invertida do Windows
-    subpasta = (dados.get('pasta') or '').strip().replace('\\', '/').strip('/')
-
-    caminho_alvo = os.path.abspath(os.path.join(PASTA_RAIZ, subpasta))
-    raiz_abs = os.path.abspath(PASTA_RAIZ)
-
-    # Segurança: Impede que o usuário suba níveis além da pasta de gcodes
-    if not caminho_alvo.startswith(raiz_abs):
-        return jsonify({"error": "Acesso negado fora da raiz"}), 403
-
     try:
+        dados = request.json or {}
+        # Garante que o caminho seja limpo de barras invertidas do Windows
+        subpasta = (dados.get('pasta') or '').strip().replace('\\', '/').strip('/')
+        
+        caminho_alvo = os.path.abspath(os.path.join(PASTA_RAIZ, subpasta))
+        
+        # Trava de segurança para não sair da pasta gcodes
+        if not caminho_alvo.startswith(os.path.abspath(PASTA_RAIZ)):
+            return jsonify({"error": "Acesso Negado"}), 403
+
         itens = os.listdir(caminho_alvo)
-        pastas = []
-        arquivos = []
+        pastas, arquivos = [], []
 
         for nome in itens:
-            if nome.startswith('.') or nome in ['Thumbs.db', '.DS_Store']:
+            # Ignora arquivos ocultos e do sistema
+            if nome.startswith('.') or nome in ['Thumbs.db', '.DS_Store']: 
                 continue
-                
-            caminho_full = os.path.join(caminho_alvo, nome)
             
-            if os.path.isdir(caminho_full):
+            full_path = os.path.join(caminho_alvo, nome)
+            
+            if os.path.isdir(full_path):
                 pastas.append({"nome": nome, "tipo": "pasta"})
             else:
-                # Calcula o tamanho do arquivo para mostrar na UI igual à memória interna
-                tamanho_bytes = os.path.getsize(caminho_full)
-                tamanho_mb = round(tamanho_bytes / (1024 * 1024), 1)
+                # Pega o tamanho em MB para a tag de estilização
+                stats = os.stat(full_path)
+                tamanho = round(stats.st_size / (1024 * 1024), 1)
                 arquivos.append({
                     "nome": nome, 
                     "tipo": "arquivo", 
-                    "tamanho": tamanho_mb
+                    "tamanho": f"{tamanho} MB"
                 })
 
         return jsonify({
@@ -808,7 +806,8 @@ def navegar():
             "arquivos": sorted(arquivos, key=lambda x: x['nome'])
         })
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        # Retorna o erro exato caso o Python não consiga ler a pasta
+        return jsonify({"error": f"Erro de leitura: {str(e)}"}), 500
     
 
 @app.route('/api/arquivos_internos/<ip>')
