@@ -343,13 +343,13 @@ function fecharModal() {
    3) ARQUIVOS (BIBLIOTECA CENTRAL / NAVEGAÇÃO / SELEÇÃO)
 ========================================================= */
 /* =========================================================
-   3) BIBLIOTECA CENTRAL - NAVEGAÇÃO E ESTILIZAÇÃO UNIFICADA
+   3) BIBLIOTECA CENTRAL - NAVEGAÇÃO COM ESTILO UNIFICADO
    ========================================================= */
 function carregarPasta(caminho) {
     const ul = document.getElementById('listaGcodes');
     if (!ul) return;
 
-    ul.innerHTML = '<li class="loading-state">Acessando arquivos do servidor...</li>';
+    ul.innerHTML = '<li class="loading-state">Lendo arquivos do servidor...</li>';
 
     fetch('/navegar', {
         method: 'POST',
@@ -358,6 +358,12 @@ function carregarPasta(caminho) {
     })
     .then(r => r.json())
     .then(dados => {
+        // Se o servidor retornar erro no JSON, exibe na tela
+        if (dados.error) {
+            ul.innerHTML = `<li class="error-msg">⚠️ ${dados.error}</li>`;
+            return;
+        }
+
         pastaAtual = dados.atual || '';
         ul.innerHTML = '';
 
@@ -367,7 +373,7 @@ function carregarPasta(caminho) {
         const btnVoltar = document.getElementById('btnVoltar');
         if (btnVoltar) btnVoltar.disabled = (pastaAtual === '');
 
-        // Renderiza Pastas (Estilo Memória Interna)
+        // 1. Renderiza Pastas (Estilo Klipper)
         dados.pastas.forEach(p => {
             const li = document.createElement('li');
             li.className = 'internal-file-item';
@@ -381,7 +387,7 @@ function carregarPasta(caminho) {
             ul.appendChild(li);
         });
 
-        // Renderiza Arquivos (Estilo Memória Interna com Trava de Extensão)
+        // 2. Renderiza Arquivos (Com tag de MB laranja)
         dados.arquivos.forEach(f => {
             const isGcode = f.nome.toLowerCase().endsWith('.gcode') || f.nome.toLowerCase().endsWith('.bgcode');
             const rel = pastaAtual ? `${pastaAtual}/${f.nome}` : f.nome;
@@ -391,10 +397,10 @@ function carregarPasta(caminho) {
             li.innerHTML = `
                 <div class="file-info">
                     <strong class="file-name-text">${f.nome}</strong>
-                    <small class="file-size-tag">${f.tamanho} MB</small>
+                    <small class="file-size-tag">${f.tamanho}</small>
                 </div>
                 <button class="btn-print-internal" 
-                        ${isGcode ? '' : 'disabled style="opacity: 0.3; cursor: not-allowed;"'}
+                        ${isGcode ? '' : 'disabled style="opacity: 0.3;"'}
                         onclick="imprimirArquivoBiblioteca('${rel}')">
                     ${isGcode ? 'IMPRIMIR' : 'SÓ GCODE'}
                 </button>
@@ -403,14 +409,13 @@ function carregarPasta(caminho) {
         });
 
         if (dados.pastas.length === 0 && dados.arquivos.length === 0) {
-            ul.innerHTML = '<li class="empty-msg">Pasta vazia</li>';
+            ul.innerHTML = '<li class="empty-msg">Nenhum arquivo nesta pasta.</li>';
         }
     })
-    .catch(() => {
-        ul.innerHTML = '<li class="error-msg">Erro ao carregar arquivos do servidor.</li>';
+    .catch(err => {
+        ul.innerHTML = '<li class="error-msg">Erro de conexão com o servidor.</li>';
     });
 }
-
 
 function selecionarArquivo(el, nome) {
     document.querySelectorAll('.item-file').forEach(i => i.classList.remove('selected'));
