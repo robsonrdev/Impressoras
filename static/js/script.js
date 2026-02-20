@@ -554,52 +554,58 @@ function recuperarEstadoUploads() {
 }
 
 function iniciarMonitoramentoUpload(ip, idLimpo) {
-    if (!ip) return;
-    
-    if (uploadsAtivos[ip]) {
+  if (!ip) return;
+
+  // evita criar 2 loops pro mesmo IP
+  if (uploadsAtivos[ip]) {
     clearInterval(uploadsAtivos[ip]);
     delete uploadsAtivos[ip];
-    }
+  }
 
-    const loader = document.getElementById(`loader-${idLimpo}`);
-    if (loader) loader.style.display = 'flex';
-    
-    // ✅ NOVO: Reset visual imediato para não mostrar dados da impressão anterior
-const fillEl = document.getElementById(`fill-${idLimpo}`);
-const pctEl  = document.getElementById(`pct-${idLimpo}`);
+  const loader = document.getElementById(`loader-${idLimpo}`);
+  if (loader) loader.style.display = 'flex';
 
-if (fillEl) fillEl.style.width = d.p + '%';
-if (pctEl) pctEl.innerText = d.p + '%';
+  // reset visual
+  const fill = document.getElementById(`fill-${idLimpo}`);
+  const pct  = document.getElementById(`pct-${idLimpo}`);
+  if (fill) fill.style.width = '0%';
+  if (pct)  pct.innerText = '0%';
 
-    let ciclosIgnorados = 0; // Trava para ignorar o 100% "fantasma" do passado
+  let ciclosIgnorados = 0;
 
-    uploadsAtivos[ip] = setInterval(() => {
-        fetch(`/progresso_transmissao/${ip}`)
-            .then(r => r.json())
-            .then(d => {
-    // Se ainda não existe status de upload para este IP, não mexe no visual
-    if (!d || typeof d.p !== 'number' || d.msg === '...') return;
+  uploadsAtivos[ip] = setInterval(async () => {
+    try {
+      const resp = await fetch(`/progresso_transmissao/${ip}`);
+      const d = await resp.json();
 
-    const msg = document.querySelector(`#loader-${idLimpo} .status-msg`);
+      // se não tem status ainda, não mexe no UI
+      if (!d || typeof d.p !== 'number' || d.msg === '...') return;
 
-    if (fill) fill.style.width = d.p + '%';
-    if (pct) pct.innerText = d.p + '%';
-    if (msg) msg.innerText = d.msg;
+      const msgEl = document.querySelector(`#loader-${idLimpo} .status-msg`);
 
-    // Ignora os primeiros ciclos se vier 100% antigo
-    if (d.p >= 100 && ciclosIgnorados < 2) {
+      if (fill) fill.style.width = `${d.p}%`;
+      if (pct)  pct.innerText = `${d.p}%`;
+      if (msgEl) msgEl.innerText = d.msg;
+
+      // ignora 100% fantasma (de estado anterior)
+      if (d.p >= 100 && ciclosIgnorados < 2) {
         ciclosIgnorados++;
         return;
-    }
+      }
 
-    if (d.p >= 100 || d.p === -1) {
+      // terminou ou deu erro
+      if (d.p >= 100 || d.p === -1) {
         clearInterval(uploadsAtivos[ip]);
+        delete uploadsAtivos[ip];
         setTimeout(() => finalizarVisualUpload(idLimpo), 2000);
+      }
+    } catch (err) {
+      console.warn("Aguardando servidor de Betim...", err);
     }
-})
-            .catch(() => console.warn("Aguardando servidor de Betim..."));
-    }, 1000);
+  }, 1000);
 }
+
+
 function finalizarVisualUpload(idLimpo) {
     const loader = document.getElementById(`loader-${idLimpo}`);
     const success = document.getElementById(`success-${idLimpo}`);
