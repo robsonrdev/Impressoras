@@ -395,8 +395,7 @@ function carregarPasta(caminho) {
                     <strong class="file-name-text">📁 ${p.nome}</strong>
                     <small class="file-size-tag">Diretório</small>
                 </div>
-                <button class="btn-print-internal" onclick="imprimirArquivoInterno('${nomeArquivo.replace(/'/g, "\\'")}', event)">
-    IMPRIMIR>ABRIR</button>
+                <button class="btn-print-internal" onclick="carregarPasta('${pastaAtual ? pastaAtual + '/' + p.nome : p.nome}')">ABRIR</button>
             `;
             ul.appendChild(li);
         });

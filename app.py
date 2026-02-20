@@ -698,7 +698,6 @@ def aguardar_estabilidade_arquivo(caminho, timeout=60):
     return False
 
 
-# --- LÓGICA DE UPLOAD ---
 def tarefa_upload(ip_alvo, caminho_completo):
     nome_arquivo = os.path.basename(caminho_completo)
     try:
@@ -745,7 +744,6 @@ def tarefa_upload(ip_alvo, caminho_completo):
         erro_formatado = str(e)[:40]
         print(f"🚨 ERRO CRÍTICO EM {ip_alvo}: {e}")
         PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": f"Erro: {erro_formatado}"}
-
 
 # --- Inicio Funcao Registrar Conclusao (Data Corrigida) ---
 def registrar_conclusao(nome_arquivo):
@@ -803,6 +801,7 @@ def cadastrar_impressora():
 def status_atualizado():
     disponiveis = sum(1 for p in IMPRESSORAS_ENCONTRADAS.values() if p.get('cor') == 'ready')
     return jsonify({"impressoras": IMPRESSORAS_ENCONTRADAS, "total_disponiveis": disponiveis})
+
 
 @app.route('/imprimir', methods=['POST'])
 def imprimir():
