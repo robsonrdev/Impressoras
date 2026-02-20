@@ -395,7 +395,8 @@ function carregarPasta(caminho) {
                     <strong class="file-name-text">📁 ${p.nome}</strong>
                     <small class="file-size-tag">Diretório</small>
                 </div>
-                <button class="btn-print-internal" onclick="carregarPasta('${pastaAtual ? pastaAtual + '/' + p.nome : p.nome}')">ABRIR</button>
+                <button class="btn-print-internal" onclick="imprimirArquivoInterno('${nomeArquivo.replace(/'/g, "\\'")}', event)">
+    IMPRIMIR>ABRIR</button>
             `;
             ul.appendChild(li);
         });
@@ -430,6 +431,7 @@ function carregarPasta(caminho) {
     });
 }
 
+/* No módulo 3 (ARQUIVOS) */
 function selecionarArquivo(el, nome) {
     document.querySelectorAll('.item-file').forEach(i => i.classList.remove('selected'));
     el.classList.add('selected');
@@ -438,14 +440,16 @@ function selecionarArquivo(el, nome) {
     if (!btn) return;
 
     btn.disabled = false;
-    btn.dataset.arquivo = pastaAtual + (pastaAtual ? '\\' : '') + nome;
+    // ✅ Padronizado para barra normal (Linux/Samba)
+    btn.dataset.arquivo = pastaAtual + (pastaAtual ? '/' : '') + nome;
     btn.innerText = "INICIAR PRODUÇÃO";
 }
 
 function voltarPasta() {
-    let partes = (pastaAtual || '').split('\\');
+    // ✅ Padronizado para barra normal
+    let partes = (pastaAtual || '').split('/');
     partes.pop();
-    carregarPasta(partes.join('\\'));
+    carregarPasta(partes.join('/'));
 }
 /* =========================================================
    /3) ARQUIVOS (BIBLIOTECA CENTRAL / NAVEGAÇÃO / SELEÇÃO)
@@ -566,16 +570,18 @@ function iniciarMonitoramentoUpload(ip, idLimpo) {
     }, 1000);
 }
 function finalizarVisualUpload(idLimpo) {
-    const content = document.getElementById(`content-${idLimpo}`);
-    const success = document.getElementById(`success-${idLimpo}`);
     const loader = document.getElementById(`loader-${idLimpo}`);
+    const success = document.getElementById(`success-${idLimpo}`);
 
-    if (content) content.style.display = 'none';
+    // ✅ Apenas esconde o loader de transmissão, mantém o card visível
+    if (loader) loader.style.opacity = '0.5'; 
     if (success) success.style.display = 'flex';
 
     setTimeout(() => {
         if (loader) loader.style.display = 'none';
-    }, 3000);
+        if (loader) loader.style.opacity = '1';
+        if (success) success.style.display = 'none';
+    }, 4000); // 4 segundos para você ter certeza do sucesso em Betim
 }
 /* =========================================================
    /5) UPLOAD / TRANSMISSÃO (RECUPERAÇÃO + MONITORAMENTO)

@@ -670,59 +670,81 @@ def enfileirar_impressao(ip, caminho_completo, arquivo_label=None):
 """Fila de impressão """
 
 def aguardar_estabilidade_arquivo(caminho, timeout=60):
-    """Garante que o Windows terminou de gravar o arquivo no Samba de Betim"""
+    """Garante sincronia total entre Windows -> Samba -> Flask"""
     tamanho_anterior = -1
     leituras_iguais = 0
     inicio = time.time()
     
     while time.time() - inicio < timeout:
         try:
+            if not os.path.exists(caminho):
+                leituras_iguais = 0
+                continue
+
             tamanho_atual = os.path.getsize(caminho)
+            
+            # ✅ Só prossegue se o arquivo tiver tamanho e não mudar por 6 verificações (aprox. 8 segundos)
             if tamanho_atual > 0 and tamanho_atual == tamanho_anterior:
                 leituras_iguais += 1
-                # ✅ Só libera se o tamanho ficar estático por 5 verificações
-                if leituras_iguais >= 5: 
+                if leituras_iguais >= 6: 
                     return True
             else:
                 leituras_iguais = 0
             tamanho_anterior = tamanho_atual
-        except: pass
-        time.sleep(1.2) 
+        except Exception as e:
+            print(f"⚠️ Erro ao checar arquivo: {e}")
+            
+        time.sleep(1.3) 
     return False
+
 
 # --- LÓGICA DE UPLOAD ---
 def tarefa_upload(ip_alvo, caminho_completo):
     nome_arquivo = os.path.basename(caminho_completo)
     try:
-        # 🛡️ PASSO 1: Sincronia de Disco (Anti-Corte)
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": 2, "msg": "Validando integridade..."}
+        # 🛡️ PASSO 1: Sincronia de Disco
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": 2, "msg": "Sincronizando Rede..."}
         if not aguardar_estabilidade_arquivo(caminho_completo):
-            raise Exception("Erro: Arquivo incompleto no servidor")
+            raise Exception("Arquivo instável ou incompleto no Samba")
+
+        tamanho_real = os.path.getsize(caminho_completo)
 
         with UPLOAD_SEM:
-            # 🚀 PASSO 2: Envio para a Neptune 4 MAX
+            # 🚀 PASSO 2: Transmissão via Stream
+            PROGRESSO_UPLOAD[ip_alvo] = {"p": 5, "msg": "Enviando G-Code..."}
+            
             with open(caminho_completo, 'rb') as f:
                 monitor = Monitor(f, ip_alvo)
                 files = {'file': (nome_arquivo, monitor)}
+                
+                # Timeout agressivo para não deixar a conexão "pendurada"
                 resp = SESSAO_REDE.post(
                     f"http://{ip_alvo}/server/files/upload",
-                    files=files, timeout=1800
+                    files=files, 
+                    timeout=1800 
                 )
                 resp.raise_for_status()
 
-        # 💾 PASSO 3: Flush de Memória (Onde o erro costuma ocorrer)
-        # Força o Klipper a terminar de escrever o arquivo no eMMC
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": 98, "msg": "Finalizando gravação..."}
+        # 💾 PASSO 3: Confirmação de Buffer no Klipper
+        # Dá 5 segundos para o sistema de arquivos da Neptune fechar o arquivo
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": 98, "msg": "Validando no Klipper..."}
         time.sleep(5.0) 
         
-        # ▶️ PASSO 4: Comando de Início Seguro
+        # ▶️ PASSO 4: Comando de Início
         nome_url = urllib.parse.quote(nome_arquivo)
-        SESSAO_REDE.post(f"http://{ip_alvo}/printer/print/start?filename={nome_url}", timeout=15)
+        start_resp = SESSAO_REDE.post(
+            f"http://{ip_alvo}/printer/print/start?filename={nome_url}", 
+            timeout=15
+        )
+        start_resp.raise_for_status()
 
         PROGRESSO_UPLOAD[ip_alvo] = {"p": 100, "msg": "Sucesso!"}
+        print(f"✅ Impressão iniciada com sucesso em {ip_alvo}: {nome_arquivo}")
         
     except Exception as e:
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": f"Erro: {str(e)[:35]}"}
+        erro_formatado = str(e)[:40]
+        print(f"🚨 ERRO CRÍTICO EM {ip_alvo}: {e}")
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": f"Erro: {erro_formatado}"}
 
 
 # --- Inicio Funcao Registrar Conclusao (Data Corrigida) ---
@@ -785,18 +807,23 @@ def status_atualizado():
 @app.route('/imprimir', methods=['POST'])
 def imprimir():
     dados = request.json
-    ip, arquivo = dados.get('ip'), dados.get('arquivo')
+    ip = dados.get('ip')
+    arquivo = dados.get('arquivo')
+
+    if not ip or not arquivo:
+        return jsonify({"success": False, "message": "Dados incompletos"}), 400
 
     caminho = os.path.abspath(os.path.join(PASTA_RAIZ, arquivo))
+    
+    # ✅ Validação imediata de segurança
     if not os.path.exists(caminho):
-        return jsonify({"success": False, "message": "Arquivo não encontrado"})
+        return jsonify({"success": False, "message": "Arquivo ainda não chegou no servidor"}), 404
+
+    # Limpa o status antigo para evitar o "100% fantasma" no dashboard
+    PROGRESSO_UPLOAD[ip] = {"p": 0, "msg": "Entrando na fila..."}
 
     enfileirar_impressao(ip, caminho, arquivo_label=os.path.basename(caminho))
     return jsonify({"success": True, "queued": True})
-
-@app.route('/progresso_transmissao/<ip>')
-def progresso_transmissao(ip):
-    return jsonify(PROGRESSO_UPLOAD.get(ip, {"p": 0, "msg": "..."}))
 
 
 # --- 1) Rota Navegar (Acesso a Pastas e Arquivos com Tamanho) ---
