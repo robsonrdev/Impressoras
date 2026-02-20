@@ -701,49 +701,40 @@ def aguardar_estabilidade_arquivo(caminho, timeout=60):
 def tarefa_upload(ip_alvo, caminho_completo):
     nome_arquivo = os.path.basename(caminho_completo)
     try:
-        # 🛡️ PASSO 1: Sincronia de Disco
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": 2, "msg": "Sincronizando Rede..."}
+        # 1. Aguarda estabilidade do Samba
         if not aguardar_estabilidade_arquivo(caminho_completo):
-            raise Exception("Arquivo instável ou incompleto no Samba")
+            raise Exception("Arquivo instável no servidor")
 
-        tamanho_real = os.path.getsize(caminho_completo)
+        tamanho_local = os.path.getsize(caminho_completo)
 
         with UPLOAD_SEM:
-            # 🚀 PASSO 2: Transmissão via Stream
-            PROGRESSO_UPLOAD[ip_alvo] = {"p": 5, "msg": "Enviando G-Code..."}
-            
+            # 2. Transmissão
+            PROGRESSO_UPLOAD[ip_alvo] = {"p": 5, "msg": "Transmitindo..."}
             with open(caminho_completo, 'rb') as f:
                 monitor = Monitor(f, ip_alvo)
                 files = {'file': (nome_arquivo, monitor)}
-                
-                # Timeout agressivo para não deixar a conexão "pendurada"
-                resp = SESSAO_REDE.post(
-                    f"http://{ip_alvo}/server/files/upload",
-                    files=files, 
-                    timeout=1800 
-                )
+                resp = SESSAO_REDE.post(f"http://{ip_alvo}/server/files/upload", files=files, timeout=1800)
                 resp.raise_for_status()
 
-        # 💾 PASSO 3: Confirmação de Buffer no Klipper
-        # Dá 5 segundos para o sistema de arquivos da Neptune fechar o arquivo
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": 98, "msg": "Validando no Klipper..."}
-        time.sleep(5.0) 
-        
-        # ▶️ PASSO 4: Comando de Início
-        nome_url = urllib.parse.quote(nome_arquivo)
-        start_resp = SESSAO_REDE.post(
-            f"http://{ip_alvo}/printer/print/start?filename={nome_url}", 
-            timeout=15
-        )
-        start_resp.raise_for_status()
+        # 🛡️ 3. VALIDAÇÃO DE ENGENHARIA (O Pulo do Gato)
+        time.sleep(3.0) # Tempo para o Klipper indexar
+        check = SESSAO_REDE.get(f"http://{ip_alvo}/server/files/list?root=gcodes", timeout=10)
+        if check.status_code == 200:
+            arquivos = check.json().get('result', [])
+            meta = next((a for a in arquivos if a['path'] == nome_arquivo), None)
+            if meta and abs(meta['size'] - tamanho_local) > 1024:
+                raise Exception(f"Corte detectado: {meta['size']} de {tamanho_local} bytes")
 
+        # 4. Início Seguro
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": 98, "msg": "Iniciando..."}
+        nome_url = urllib.parse.quote(nome_arquivo)
+        SESSAO_REDE.post(f"http://{ip_alvo}/printer/print/start?filename={nome_url}", timeout=15)
         PROGRESSO_UPLOAD[ip_alvo] = {"p": 100, "msg": "Sucesso!"}
-        print(f"✅ Impressão iniciada com sucesso em {ip_alvo}: {nome_arquivo}")
-        
+
     except Exception as e:
-        erro_formatado = str(e)[:40]
-        print(f"🚨 ERRO CRÍTICO EM {ip_alvo}: {e}")
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": f"Erro: {erro_formatado}"}
+        print(f"🚨 Falha em {ip_alvo}: {e}")
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": f"Erro: {str(e)[:30]}"}
+        
 
 # --- Inicio Funcao Registrar Conclusao (Data Corrigida) ---
 def registrar_conclusao(nome_arquivo):

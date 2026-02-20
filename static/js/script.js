@@ -506,10 +506,9 @@ function carregarArquivosInternos() {
 ========================================================= */
 
 /** Reconecta aos uploads ativos ao carregar a página */
+// ✅ Substitua a função recuperarEstadoUploads
 function recuperarEstadoUploads() {
-    const cards = document.querySelectorAll('.card-pro');
-
-    cards.forEach(card => {
+    document.querySelectorAll('.card-pro').forEach(card => {
         const onclick = card.getAttribute('onclick') || '';
         const ipMatch = onclick.match(/'([^']+)'/);
         if (!ipMatch) return;
@@ -520,7 +519,8 @@ function recuperarEstadoUploads() {
         fetch(`/progresso_transmissao/${ip}`)
             .then(r => r.json())
             .then(d => {
-                if (d.p > 0 && d.p < 100) {
+                // ✅ Mostra o loader se estiver enviando OU se deu erro (-1)
+                if (d.msg !== "..." && (d.p < 100 || d.p === -1)) {
                     const loader = document.getElementById(`loader-${idLimpo}`);
                     if (loader) loader.style.display = 'flex';
                     iniciarMonitoramentoUpload(ip, idLimpo);
@@ -530,7 +530,7 @@ function recuperarEstadoUploads() {
 }
 
 function iniciarMonitoramentoUpload(ip, idLimpo) {
-    if (uploadsAtivos[ip]) clearInterval(uploadsAtivos[ip]);
+    if (!ip) return;
 
     const loader = document.getElementById(`loader-${idLimpo}`);
     if (loader) loader.style.display = 'flex';
