@@ -173,35 +173,49 @@ def salvar_maquina(ip, nome):
 class Monitor:
     def __init__(self, file, ip_alvo):
         self.file = file
+        # ✅ Ponto Crítico: O total deve ser o tamanho real do arquivo estabilizado
         self.total = os.path.getsize(file.name)
         self.bytes_read = 0
         self.ip_alvo = ip_alvo
 
-        # controle de atualização (throttle)
+        # Controle de atualização para não sobrecarregar o Flask/Frontend
         self._last_update = 0.0
-        self._min_interval = 0.25  # 250 ms
+        self._min_interval = 0.20  # Reduzi para 200ms para uma barra mais fluida
 
     def read(self, size=-1):
-        # força leitura em blocos maiores (menos chamadas)
+        # Mantemos a leitura em blocos de 256KB para eficiência na rede de Betim
         if size is None or size < 256 * 1024:
-            size = 256 * 1024  # 256 KB
+            size = 256 * 1024 
 
         data = self.file.read(size)
-        self.bytes_read += len(data)
+        len_data = len(data)
+        self.bytes_read += len_data
 
         now = time.time()
-        if self.total > 0 and (now - self._last_update) >= self._min_interval:
-            self._last_update = now
+        if self.total > 0:
+            # Calculamos a porcentagem real da transmissão (0 a 100)
+            percent = int((self.bytes_read / self.total) * 100)
+            
+            # Atualiza apenas se o intervalo passou ou se chegamos ao fim
+            if (now - self._last_update) >= self._min_interval or self.bytes_read >= self.total:
+                self._last_update = now
+                
+                # ✅ Lógica de Feedback:
+                # De 0 a 99% é transmissão de rede.
+                # 100% significa que o Klipper recebeu tudo e está gravando no disco interno.
+                msg = f"Transmitindo... ({percent}%)"
+                if percent >= 100:
+                    msg = "Finalizando gravação na impressora..."
 
-            percent = int((self.bytes_read / self.total) * 90)
-            PROGRESSO_UPLOAD[self.ip_alvo] = {
-                "p": percent,
-                "msg": f"Transmitindo... ({percent}%)"
-            }
+                PROGRESSO_UPLOAD[self.ip_alvo] = {
+                    "p": percent,
+                    "msg": msg
+                }
 
         return data
 
     def __getattr__(self, attr):
+        # Repassa chamadas como .name ou .close() para o objeto de arquivo original
         return getattr(self.file, attr)
 
 
@@ -655,19 +669,39 @@ def enfileirar_impressao(ip, caminho_completo, arquivo_label=None):
 
 """Fila de impressão """
 
+def aguardar_estabilidade_arquivo(caminho, timeout=30):
+    """Verifica se o tamanho do arquivo parou de mudar (evita gcode cortado)"""
+    tamanho_anterior = -1
+    inicio = time.time()
+    while time.time() - inicio < timeout:
+        try:
+            tamanho_atual = os.path.getsize(caminho)
+            if tamanho_atual > 0 and tamanho_atual == tamanho_anterior:
+                return True # Arquivo estabilizou
+            tamanho_anterior = tamanho_atual
+        except:
+            pass
+        time.sleep(1) # Checa a cada segundo
+    return False
+
 # --- LÓGICA DE UPLOAD ---
 def tarefa_upload(ip_alvo, caminho_completo):
     nome_arquivo = os.path.basename(caminho_completo)
     try:
+        # 🛡️ PASSO 1: Sincronia de Rede (Samba/Windows)
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": 2, "msg": "Sincronizando arquivo..."}
+        if not aguardar_estabilidade_arquivo(caminho_completo):
+            raise Exception("Arquivo instável (Samba ainda gravando)")
+
         with UPLOAD_SEM:
-            # ✅ Status intermediário claro
-            PROGRESSO_UPLOAD[ip_alvo] = {"p": 5, "msg": "Conectando à Neptune..."}
+            # 🚀 PASSO 2: Transmissão para a Impressora
+            PROGRESSO_UPLOAD[ip_alvo] = {"p": 5, "msg": "Iniciando transmissão..."}
 
             with open(caminho_completo, 'rb') as f:
-                monitor = Monitor(f, ip_alvo)
+                monitor = Monitor(f, ip_alvo) # Usa a sua nova classe Monitor
                 files = {'file': (nome_arquivo, monitor)}
                 
-                # Aumentamos o timeout para gcodes pesados de Betim
+                # Timeout de 20 min para gcodes pesados de Betim
                 resp = SESSAO_REDE.post(
                     f"http://{ip_alvo}/server/files/upload",
                     files=files,
@@ -675,18 +709,26 @@ def tarefa_upload(ip_alvo, caminho_completo):
                 )
                 resp.raise_for_status()
 
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": 95, "msg": "Processando no Klipper..."}
+        # 💾 PASSO 3: Buffer de Segurança
+        # Dá tempo para o eMMC da impressora terminar de gravar o arquivo físico
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": 98, "msg": "Finalizando no Klipper..."}
+        time.sleep(2.0)
         
-        # Comando de início
+        # ▶️ PASSO 4: Comando de Início
         nome_url = urllib.parse.quote(nome_arquivo)
-        SESSAO_REDE.post(f"http://{ip_alvo}/printer/print/start?filename={nome_url}", timeout=5)
+        SESSAO_REDE.post(
+            f"http://{ip_alvo}/printer/print/start?filename={nome_url}", 
+            timeout=10
+        )
 
-        # ✅ NÃO APAGUE O STATUS IMEDIATAMENTE
+        # ✅ SUCESSO
         PROGRESSO_UPLOAD[ip_alvo] = {"p": 100, "msg": "Sucesso!"}
         
     except Exception as e:
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": "Falha no envio"}
-
+        # Em caso de erro, reporta no Dashboard e loga no terminal
+        erro_msg = str(e)[:40]
+        print(f"🚨 Falha no upload para {ip_alvo}: {e}")
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": f"Erro: {erro_msg}"}
 
 
 # --- Inicio Funcao Registrar Conclusao (Data Corrigida) ---
