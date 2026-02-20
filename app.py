@@ -677,69 +677,120 @@ def aguardar_estabilidade_arquivo(caminho, timeout=60):
     
     while time.time() - inicio < timeout:
         try:
+            # ✅ CORREÇÃO: se o arquivo ainda não existe, NÃO pode ficar em loop travado
             if not os.path.exists(caminho):
                 leituras_iguais = 0
+                time.sleep(0.5)
                 continue
 
             tamanho_atual = os.path.getsize(caminho)
-            
-            # ✅ Só prossegue se o arquivo tiver tamanho e não mudar por 6 verificações (aprox. 8 segundos)
+
+            # ✅ Só prossegue se o arquivo tiver tamanho e não mudar por 6 verificações
             if tamanho_atual > 0 and tamanho_atual == tamanho_anterior:
                 leituras_iguais += 1
-                if leituras_iguais >= 6: 
+                if leituras_iguais >= 6:
                     return True
             else:
                 leituras_iguais = 0
+
             tamanho_anterior = tamanho_atual
+
         except Exception as e:
             print(f"⚠️ Erro ao checar arquivo: {e}")
-            
-        time.sleep(1.3) 
-    return False
 
+        time.sleep(1.3)
+        
+    return False
 
 def tarefa_upload(ip_alvo, caminho_completo):
     nome_arquivo = os.path.basename(caminho_completo)
+
     try:
         # 🛡️ PASSO 1: Sincronia de Disco (Anti-Corte)
         PROGRESSO_UPLOAD[ip_alvo] = {"p": 2, "msg": "Sincronizando..."}
         if not aguardar_estabilidade_arquivo(caminho_completo):
-            raise Exception("Erro: Arquivo incompleto no servidor")
+            raise Exception("Arquivo incompleto no servidor (Samba)")
 
         tamanho_local = os.path.getsize(caminho_completo)
 
         with UPLOAD_SEM:
             # 🚀 PASSO 2: Envio para a Neptune
             PROGRESSO_UPLOAD[ip_alvo] = {"p": 5, "msg": "Transmitindo..."}
+
             with open(caminho_completo, 'rb') as f:
                 monitor = Monitor(f, ip_alvo)
                 files = {'file': (nome_arquivo, monitor)}
-                resp = SESSAO_REDE.post(f"http://{ip_alvo}/server/files/upload", files=files, timeout=1800)
-                resp.raise_for_status()
+
+                url_upload = f"http://{ip_alvo}/server/files/upload"
+                resp = SESSAO_REDE.post(url_upload, files=files, timeout=1800)
+
+                # ✅ Melhora: se der erro, mostra mais contexto
+                if resp.status_code >= 400:
+                    body = (resp.text or "")[:300]
+                    raise Exception(f"Falha upload HTTP {resp.status_code}: {body}")
 
         # 💾 PASSO 3: Validação de Bytes (A Trava Final)
         PROGRESSO_UPLOAD[ip_alvo] = {"p": 95, "msg": "Validando integridade..."}
-        time.sleep(3.0) # Tempo para o Klipper indexar o arquivo
-        
-        check = SESSAO_REDE.get(f"http://{ip_alvo}/server/files/list?root=gcodes", timeout=10)
+        time.sleep(3.0)  # Tempo para o Klipper indexar o arquivo
+
+        url_list = f"http://{ip_alvo}/server/files/list?root=gcodes"
+        check = SESSAO_REDE.get(url_list, timeout=10)
+
         if check.status_code == 200:
-            arquivos = check.json().get('result', [])
-            # Procura o arquivo na memória da impressora e compara o tamanho
-            meta = next((a for a in arquivos if a.get('path') == nome_arquivo), None)
-            if meta and meta['size'] != tamanho_local:
-                raise Exception(f"Corte detectado: {meta['size']} de {tamanho_local} bytes")
+            data = check.json()
+            arquivos = data.get('result', [])
+
+            # ✅ Ajuste: path pode vir como "gcodes/arquivo" ou "subpasta/arquivo"
+            def bate(a):
+                p = (a.get('path') or '').replace("\\", "/")
+                return p == nome_arquivo or p.endswith("/" + nome_arquivo)
+
+            meta = next((a for a in arquivos if bate(a)), None)
+
+            # Se encontrou, valida tamanho
+            if meta and isinstance(meta.get('size'), int):
+                if meta['size'] != tamanho_local:
+                    raise Exception(f"Corte detectado: {meta['size']} de {tamanho_local} bytes")
+            # Se não encontrou, não derruba o fluxo, mas registra aviso
+            else:
+                print(f"⚠️ Aviso: arquivo '{nome_arquivo}' não localizado na listagem para validar tamanho.")
+        else:
+            print(f"⚠️ Aviso: não foi possível listar arquivos (HTTP {check.status_code}).")
 
         # ▶️ PASSO 4: Comando de Início Seguro
         PROGRESSO_UPLOAD[ip_alvo] = {"p": 98, "msg": "Iniciando..."}
         nome_url = urllib.parse.quote(nome_arquivo)
-        SESSAO_REDE.post(f"http://{ip_alvo}/printer/print/start?filename={nome_url}", timeout=15)
+        url_start = f"http://{ip_alvo}/printer/print/start?filename={nome_url}"
+
+        resp_start = SESSAO_REDE.post(url_start, timeout=15)
+
+        # Se falhar o start, você pode optar por não derrubar o upload,
+        # mas aqui mantive coerente: se falhar, retorna erro.
+        if resp_start.status_code >= 400:
+            body = (resp_start.text or "")[:200]
+            raise Exception(f"Falha ao iniciar impressão HTTP {resp_start.status_code}: {body}")
 
         PROGRESSO_UPLOAD[ip_alvo] = {"p": 100, "msg": "Sucesso!"}
-        
+
     except Exception as e:
         print(f"🚨 Falha crítica em {ip_alvo}: {e}")
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": f"Erro: {str(e)[:30]}"}
-        
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": f"Erro: {str(e)[:60]}"}
+
+@app.route('/progresso_transmissao/<ip>')
+def progresso_transmissao(ip):
+    """
+    Endpoint que o JS usa para monitorar o upload por IP.
+    Retorna sempre {p: int, msg: str}
+    """
+    dado = PROGRESSO_UPLOAD.get(ip)
+    if not dado:
+        # Estado neutro para o front não quebrar
+        return jsonify({"p": 0, "msg": "..."})
+    
+    # Garante formato e chaves
+    p = dado.get("p", 0)
+    msg = dado.get("msg", "...")
+    return jsonify({"p": p, "msg": msg})
 
 # --- Inicio Funcao Registrar Conclusao (Data Corrigida) ---
 def registrar_conclusao(nome_arquivo):

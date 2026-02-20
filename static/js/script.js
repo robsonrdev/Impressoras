@@ -127,12 +127,30 @@ function switchTab(tabId, ev) {
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
 
-    // Se não vier evento (caso algum lugar chame sem passar), tenta pegar window.event
-    const e = ev || window.event;
-    if (e && e.target) e.target.classList.add('active');
-
+    // ativa o conteúdo
     const tab = document.getElementById(`tab-${tabId}`);
     if (tab) tab.classList.add('active');
+
+    // ativa o botão (com ou sem evento)
+    let btn = null;
+
+    const e = ev || window.event;
+    if (e && e.target) {
+        btn = e.target.closest('.tab-btn');
+    }
+
+    if (!btn) {
+        // tenta encontrar o botão da aba pelo atributo data-tab (recomendado no HTML)
+        btn = document.querySelector(`.tab-btn[data-tab="${tabId}"]`);
+    }
+
+    if (!btn) {
+        // fallback: procura pelo onclick que contenha o tabId
+        btn = Array.from(document.querySelectorAll('.tab-btn'))
+            .find(b => (b.getAttribute('onclick') || '').includes(`'${tabId}'`) || (b.getAttribute('onclick') || '').includes(`"${tabId}"`));
+    }
+
+    if (btn) btn.classList.add('active');
 }
 
 /** Confirma exclusão de impressora */
@@ -150,96 +168,98 @@ function confirmarExclusaoImpressora() {
 
 /** 📂 Arquivos da Biblioteca Central (Servidor) */
 function imprimirArquivoBiblioteca(arquivoRelativo) {
-    if (!impressoraSelecionada) return alert("Selecione uma impressora.");
+    if (!impressoraSelecionada) return alert("Selecione uma impressora primeiro.");
 
-    // ✅ FIX: Salva os dados em constantes locais para não perdê-los no fecharModal()
+    // 🛡️ TRAVA DE ENGENHARIA: Salva o IP antes de fechar o modal
     const ipAlvo = impressoraSelecionada;
     const nomeAlvo = nomeImpressoraSelecionada;
     const idLimpo = ipAlvo.split('.').join('-');
 
-    if (!confirm(`📂 ENVIAR PARA FILA?\n\nArquivo: ${arquivoRelativo}\nDestino: ${nomeAlvo}`)) return;
+    // 1. Confirmação para evitar gasto de filamento acidental
+    if (!confirm(`🚀 INICIAR PRODUÇÃO?\n\nArquivo: ${arquivoRelativo}\nDestino: ${nomeAlvo}`)) return;
 
+    // 2. Ativa o loader visual IMEDIATAMENTE no card da farm
     const loader = document.getElementById(`loader-${idLimpo}`);
     if (loader) loader.style.display = 'flex';
 
-    // ✅ Reset visual do progresso
-    PROGRESSO_UPLOAD[ipAlvo] = { p: 0, msg: "Iniciando..." };
-
-    fetch('/api/imprimir_biblioteca', {
+    // 3. Chamada da Rota Flask
+    fetch('/imprimir', { // ✅ Usando a rota principal do seu app.py
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ip: ipAlvo, arquivo: arquivoRelativo })
+        body: JSON.stringify({ 
+            ip: ipAlvo, 
+            arquivo: arquivoRelativo 
+        })
     })
-    .then(r => r.json())
+    .then(r => {
+        if (!r.ok) throw new Error(`Erro HTTP: ${r.status}`);
+        return r.json();
+    })
     .then(res => {
         if (res.success) {
-            fecharModal(); // Agora pode fechar, pois usamos ipAlvo abaixo
+            // ✅ Agora fechamos o modal, pois o ipAlvo está seguro na constante
+            fecharModal(); 
+            
+            // ✅ Inicia o monitoramento da barra laranja no card
             iniciarMonitoramentoUpload(ipAlvo, idLimpo);
         } else {
-            alert("❌ Erro: " + res.message);
-            if (loader) loader.style.display = 'none';
+            throw new Error(res.message || "Erro desconhecido no servidor");
         }
     })
-    .catch(() => {
-        alert("🚨 Erro de conexão com o servidor.");
-        if (loader) loader.style.display = 'none';
+    .catch(err => {
+        console.error("🚨 Falha na transmissão:", err);
+        alert("❌ Erro ao enviar arquivo. Verifique a rede de Betim.");
+        if (loader) loader.style.display = 'none'; // Esconde o loader se falhar
     });
 }
 /* =========================================================
    4) ARQUIVOS INTERNOS - INICIAR PRODUÇÃO COM FEEDBACK
    ========================================================= */
-/** 💾 Arquivos da Memória Interna (Klipper) */
-/** 💾 Arquivos da Memória Interna (Klipper) */
-function imprimirArquivoInterno(filename, event) { // ✅ Adicionamos 'event' como parâmetro
-    if (!impressoraSelecionada) {
-        alert("Selecione uma impressora primeiro.");
-        return;
-    }
+   
+async function imprimirArquivoInterno(filename, event) {
+    if (!impressoraSelecionada) return alert("Selecione a máquina.");
 
-    // ✅ PASSO DE ENGENHARIA: Salva os dados antes de limpar o modal
-    const ipAlvo = impressoraSelecionada; 
-    const nomeAlvo = nomeImpressoraSelecionada;
-    const idLimpo = ipAlvo.split('.').join('-');
+    const config = {
+        ip: impressoraSelecionada,
+        nome: nomeImpressoraSelecionada,
+        id: impressoraSelecionada.split('.').join('-')
+    };
 
-    // 1. POP-UP DE CONFIRMAÇÃO
-    const confirmacao = confirm(`🚀 INICIAR AGORA?\n\nArquivo: ${filename}\nImpressora: ${nomeAlvo}`);
-    if (!confirmacao) return;
+    if (!confirm(`Confirmar início de: ${filename}?`)) return;
 
-    // 2. FEEDBACK NO BOTÃO (Usando o event passado pelo HTML)
-    const btn = event ? event.target : null;
-    let textoOriginal = "";
+    const btn = (event && event.target) ? event.target.closest('button') : null;
+    const textoOriginal = btn ? btn.innerHTML : null;
+
     if (btn) {
-        textoOriginal = btn.innerText;
-        btn.innerText = "SOLICITANDO...";
         btn.disabled = true;
+        btn.innerHTML = `<span class="spinner"></span> PROCESSANDO...`;
     }
 
-    fetch('/api/imprimir_interno', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ip: ipAlvo, filename: filename }) // ✅ Usa a constante ipAlvo
-    })
-    .then(async r => {
-        const res = await r.json();
-        if (res.success) {
-            // ✅ Agora podemos fechar o modal com segurança
-            fecharModal(); 
-            
-            // ✅ Opcional: Inicia o monitor para mostrar "Sucesso" no card principal
-            iniciarMonitoramentoUpload(ipAlvo, idLimpo); 
-        } else {
-            throw new Error(res.message || "Erro no Klipper");
-        }
-    })
-    .catch(err => {
-        alert("❌ Falha: " + err.message);
-        if (btn) {
-            btn.innerText = textoOriginal;
-            btn.disabled = false;
-        }
-    });
-}
+    try {
+        const response = await fetch('/api/imprimir_interno', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ip: config.ip, filename: filename })
+        });
 
+        const result = await response.json();
+
+        if (!result.success) throw new Error(result.message || "Falha ao iniciar impressão");
+
+        fecharModal();
+
+        // Aqui o upload não acontece (arquivo já está interno),
+        // mas você quis manter feedback padrão, então mantemos:
+        iniciarMonitoramentoUpload(config.ip, config.id);
+
+    } catch (error) {
+        console.error("🚨 Erro na Farm:", error);
+        alert(`Erro: ${error.message}`);
+        if (btn && textoOriginal) btn.innerHTML = textoOriginal;
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
 
 /** Remove impressora no backend */
 function removerImpressora(ip, nome) {
@@ -473,8 +493,13 @@ function carregarArquivosInternos() {
             }
 
             lista.innerHTML = arquivos.map(f => {
-                const nomeArquivo = f.path || f.name || "Arquivo s/ nome";
-                const tamanhoMB = (f.size / 1024 / 1024).toFixed(1);
+                const nomeArquivo = (f.path || f.name || "Arquivo s/ nome");
+                const tamanhoMB = (typeof f.size === 'number')
+                    ? (f.size / 1024 / 1024).toFixed(1)
+                    : "0.0";
+
+                // Escapa aspas simples para não quebrar o onclick
+                const nomeSeguro = String(nomeArquivo).replace(/'/g, "\\'");
 
                 return `
                     <li class="internal-file-item">
@@ -483,10 +508,9 @@ function carregarArquivosInternos() {
                             <small class="file-size-tag">${tamanhoMB} MB</small>
                         </div>
                         <button class="btn-print-internal"
-                             onclick="imprimirArquivoInterno('peça.gcode', event)">
-                         IMPRIMIR
-                    </button>
-
+                                onclick="imprimirArquivoInterno('${nomeSeguro}', event)">
+                            IMPRIMIR
+                        </button>
                     </li>
                 `;
             }).join('');
@@ -531,15 +555,21 @@ function recuperarEstadoUploads() {
 
 function iniciarMonitoramentoUpload(ip, idLimpo) {
     if (!ip) return;
+    
+    if (uploadsAtivos[ip]) {
+    clearInterval(uploadsAtivos[ip]);
+    delete uploadsAtivos[ip];
+    }
 
     const loader = document.getElementById(`loader-${idLimpo}`);
     if (loader) loader.style.display = 'flex';
     
     // ✅ NOVO: Reset visual imediato para não mostrar dados da impressão anterior
-    const fill = document.getElementById(`fill-${idLimpo}`);
-    const pct = document.getElementById(`pct-${idLimpo}`);
-    if (fill) fill.style.width = '0%';
-    if (pct) pct.innerText = '0%';
+const fillEl = document.getElementById(`fill-${idLimpo}`);
+const pctEl  = document.getElementById(`pct-${idLimpo}`);
+
+if (fillEl) fillEl.style.width = d.p + '%';
+if (pctEl) pctEl.innerText = d.p + '%';
 
     let ciclosIgnorados = 0; // Trava para ignorar o 100% "fantasma" do passado
 
@@ -547,24 +577,26 @@ function iniciarMonitoramentoUpload(ip, idLimpo) {
         fetch(`/progresso_transmissao/${ip}`)
             .then(r => r.json())
             .then(d => {
-                const msg = document.querySelector(`#loader-${idLimpo} .status-msg`);
+    // Se ainda não existe status de upload para este IP, não mexe no visual
+    if (!d || typeof d.p !== 'number' || d.msg === '...') return;
 
-                if (fill) fill.style.width = d.p + '%';
-                if (pct) pct.innerText = d.p + '%';
-                if (msg) msg.innerText = d.msg;
+    const msg = document.querySelector(`#loader-${idLimpo} .status-msg`);
 
-                // ✅ LÓGICA DE SEGURANÇA:
-                // Ignora os primeiros 2 segundos de resposta se ela vier como 100% (antiga)
-                if (d.p >= 100 && ciclosIgnorados < 2) {
-                    ciclosIgnorados++;
-                    return;
-                }
+    if (fill) fill.style.width = d.p + '%';
+    if (pct) pct.innerText = d.p + '%';
+    if (msg) msg.innerText = d.msg;
 
-                if (d.p >= 100 || d.p === -1) {
-                    clearInterval(uploadsAtivos[ip]);
-                    setTimeout(() => finalizarVisualUpload(idLimpo), 2000);
-                }
-            })
+    // Ignora os primeiros ciclos se vier 100% antigo
+    if (d.p >= 100 && ciclosIgnorados < 2) {
+        ciclosIgnorados++;
+        return;
+    }
+
+    if (d.p >= 100 || d.p === -1) {
+        clearInterval(uploadsAtivos[ip]);
+        setTimeout(() => finalizarVisualUpload(idLimpo), 2000);
+    }
+})
             .catch(() => console.warn("Aguardando servidor de Betim..."));
     }, 1000);
 }
