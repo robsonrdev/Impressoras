@@ -524,37 +524,44 @@ function recuperarEstadoUploads() {
 }
 
 function iniciarMonitoramentoUpload(ip, idLimpo) {
-    // Se já existe um monitor para este IP, limpa para não duplicar
     if (uploadsAtivos[ip]) clearInterval(uploadsAtivos[ip]);
 
     const loader = document.getElementById(`loader-${idLimpo}`);
     if (loader) loader.style.display = 'flex';
+    
+    // ✅ NOVO: Reset visual imediato para não mostrar dados da impressão anterior
+    const fill = document.getElementById(`fill-${idLimpo}`);
+    const pct = document.getElementById(`pct-${idLimpo}`);
+    if (fill) fill.style.width = '0%';
+    if (pct) pct.innerText = '0%';
+
+    let ciclosIgnorados = 0; // Trava para ignorar o 100% "fantasma" do passado
 
     uploadsAtivos[ip] = setInterval(() => {
         fetch(`/progresso_transmissao/${ip}`)
             .then(r => r.json())
             .then(d => {
-                const fill = document.getElementById(`fill-${idLimpo}`);
-                const pct = document.getElementById(`pct-${idLimpo}`);
-                const msg = document.querySelector(`#loader-${idLimpo} .status-msg`); // Adicione uma span para msgs se quiser
+                const msg = document.querySelector(`#loader-${idLimpo} .status-msg`);
 
                 if (fill) fill.style.width = d.p + '%';
                 if (pct) pct.innerText = d.p + '%';
                 if (msg) msg.innerText = d.msg;
 
-                // Só para o monitoramento se chegar em 100 ou erro (-1)
+                // ✅ LÓGICA DE SEGURANÇA:
+                // Ignora os primeiros 2 segundos de resposta se ela vier como 100% (antiga)
+                if (d.p >= 100 && ciclosIgnorados < 2) {
+                    ciclosIgnorados++;
+                    return;
+                }
+
                 if (d.p >= 100 || d.p === -1) {
                     clearInterval(uploadsAtivos[ip]);
                     setTimeout(() => finalizarVisualUpload(idLimpo), 2000);
                 }
             })
-            .catch(() => {
-                // Se falhar o fetch, não para imediatamente, tenta de novo no próximo ciclo
-                console.warn("Aguardando resposta do monitor de upload...");
-            });
-    }, 1000); // 1 segundo é suficiente para não sobrecarregar o servidor de Betim
+            .catch(() => console.warn("Aguardando servidor de Betim..."));
+    }, 1000);
 }
-
 function finalizarVisualUpload(idLimpo) {
     const content = document.getElementById(`content-${idLimpo}`);
     const success = document.getElementById(`success-${idLimpo}`);
@@ -621,32 +628,35 @@ function configurarBotaoEnviar() {
     const btn = document.getElementById('btnEnviar');
     if (!btn) return;
 
-    btn.onclick = function() {
+   btn.onclick = async function() {
         const arquivo = this.dataset.arquivo;
         const ip = impressoraSelecionada;
-
-        if (!arquivo || !ip) {
-            alert("⚠️ Selecione um arquivo e uma impressora antes de iniciar.");
-            return;
-        }
-
         const idLimpo = ip.split('.').join('-');
+
+        if (!arquivo || !ip) return;
 
         fecharModal();
 
-        // Mostra loader do card
+        // 1. Mostra o loader primeiro
         const loader = document.getElementById(`loader-${idLimpo}`);
         if (loader) loader.style.display = 'flex';
 
-        // Dispara impressão
-        fetch('/imprimir', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ ip: ip, arquivo: arquivo })
-        });
-
-        // Reutiliza monitoramento isolado
-        iniciarMonitoramentoUpload(ip, idLimpo);
+        // 2. Aguarda a confirmação do servidor de que o arquivo entrou na fila
+        try {
+            const response = await fetch('/imprimir', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ ip: ip, arquivo: arquivo })
+            });
+            
+            if (response.ok) {
+                // 3. Só agora inicia o monitoramento do progresso real
+                iniciarMonitoramentoUpload(ip, idLimpo);
+            }
+        } catch (err) {
+            console.error("Erro ao iniciar produção:", err);
+            if (loader) loader.style.display = 'none';
+        }
     };
 }
 /* =========================================================
@@ -1187,9 +1197,15 @@ function executarAcaoMassa() {
             return res;
         })
         .then(res => {
-            alert(`✅ Sucesso! Enfileirado para ${res.total || ips.length} impressoras.`);
+            alert(`✅ Sucesso! Enfileirado para ${ips.length} impressoras.`);
             fecharModalMassa();
-            // Reset da seleção para evitar envios acidentais no futuro
+            
+            // ✅ NOVO: Dispara o monitoramento para CADA impressora selecionada
+            ips.forEach(ip => {
+                const idLimpo = ip.split('.').join('-');
+                iniciarMonitoramentoUpload(ip, idLimpo);
+            });
+
             massaArquivoSelecionado = ""; 
         })
         .catch(err => alert("❌ Falha no envio em massa: " + err.message));

@@ -669,66 +669,62 @@ def enfileirar_impressao(ip, caminho_completo, arquivo_label=None):
 
 """Fila de impressão """
 
-def aguardar_estabilidade_arquivo(caminho, timeout=30):
-    """Verifica se o tamanho do arquivo parou de mudar (evita gcode cortado)"""
+def aguardar_estabilidade_arquivo(caminho, timeout=40):
+    """Verifica 3 vezes se o tamanho parou de mudar para garantir sincronia total"""
     tamanho_anterior = -1
+    confirmacoes = 0
     inicio = time.time()
+    
     while time.time() - inicio < timeout:
         try:
             tamanho_atual = os.path.getsize(caminho)
             if tamanho_atual > 0 and tamanho_atual == tamanho_anterior:
-                return True # Arquivo estabilizou
+                confirmacoes += 1
+                if confirmacoes >= 3: # Precisa de 3 leituras iguais seguidas
+                    return True
+            else:
+                confirmacoes = 0
             tamanho_anterior = tamanho_atual
-        except:
-            pass
-        time.sleep(1) # Checa a cada segundo
+        except: pass
+        time.sleep(1.5) # Aumentei o intervalo para o Samba respirar
     return False
 
 # --- LÓGICA DE UPLOAD ---
 def tarefa_upload(ip_alvo, caminho_completo):
     nome_arquivo = os.path.basename(caminho_completo)
     try:
-        # 🛡️ PASSO 1: Sincronia de Rede (Samba/Windows)
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": 2, "msg": "Sincronizando arquivo..."}
+        # 1. Garante que o arquivo está 100% no disco de Betim
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": 2, "msg": "Validando integridade..."}
         if not aguardar_estabilidade_arquivo(caminho_completo):
-            raise Exception("Arquivo instável (Samba ainda gravando)")
+            raise Exception("Timeout na sincronia do arquivo")
 
         with UPLOAD_SEM:
-            # 🚀 PASSO 2: Transmissão para a Impressora
             PROGRESSO_UPLOAD[ip_alvo] = {"p": 5, "msg": "Iniciando transmissão..."}
 
             with open(caminho_completo, 'rb') as f:
-                monitor = Monitor(f, ip_alvo) # Usa a sua nova classe Monitor
+                monitor = Monitor(f, ip_alvo)
                 files = {'file': (nome_arquivo, monitor)}
                 
-                # Timeout de 20 min para gcodes pesados de Betim
                 resp = SESSAO_REDE.post(
                     f"http://{ip_alvo}/server/files/upload",
                     files=files,
-                    timeout=1200 
+                    timeout=1500 # Aumentado para gcodes gigantes
                 )
                 resp.raise_for_status()
 
-        # 💾 PASSO 3: Buffer de Segurança
-        # Dá tempo para o eMMC da impressora terminar de gravar o arquivo físico
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": 98, "msg": "Finalizando no Klipper..."}
-        time.sleep(2.0)
+        # 2. Delay para o eMMC da impressora terminar de escrever
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": 98, "msg": "Gravando na memória..."}
+        time.sleep(3.0) 
         
-        # ▶️ PASSO 4: Comando de Início
+        # 3. Comando de início
         nome_url = urllib.parse.quote(nome_arquivo)
-        SESSAO_REDE.post(
-            f"http://{ip_alvo}/printer/print/start?filename={nome_url}", 
-            timeout=10
-        )
+        SESSAO_REDE.post(f"http://{ip_alvo}/printer/print/start?filename={nome_url}", timeout=10)
 
-        # ✅ SUCESSO
         PROGRESSO_UPLOAD[ip_alvo] = {"p": 100, "msg": "Sucesso!"}
         
     except Exception as e:
-        # Em caso de erro, reporta no Dashboard e loga no terminal
-        erro_msg = str(e)[:40]
-        print(f"🚨 Falha no upload para {ip_alvo}: {e}")
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": f"Erro: {erro_msg}"}
+        print(f"🚨 Erro crítico no upload ({ip_alvo}): {e}")
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": f"Erro: {str(e)[:30]}"}
 
 
 # --- Inicio Funcao Registrar Conclusao (Data Corrigida) ---
