@@ -636,35 +636,24 @@ function configurarBotaoEnviar() {
     const btn = document.getElementById('btnEnviar');
     if (!btn) return;
 
-   btn.onclick = async function() {
+    btn.onclick = async function() {
         const arquivo = this.dataset.arquivo;
-        const ip = impressoraSelecionada;
-        const idLimpo = ip.split('.').join('-');
+        const ipAlvo = impressoraSelecionada; // 🛡️ Trava o IP aqui
+        if (!arquivo || !ipAlvo) return alert("Selecione arquivo e impressora!");
 
-        if (!arquivo || !ip) return;
+        const idLimpo = ipAlvo.split('.').join('-');
+        fecharModal(); 
 
-        fecharModal();
-
-        // 1. Mostra o loader primeiro
         const loader = document.getElementById(`loader-${idLimpo}`);
         if (loader) loader.style.display = 'flex';
 
-        // 2. Aguarda a confirmação do servidor de que o arquivo entrou na fila
-        try {
-            const response = await fetch('/imprimir', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ ip: ip, arquivo: arquivo })
-            });
-            
-            if (response.ok) {
-                // 3. Só agora inicia o monitoramento do progresso real
-                iniciarMonitoramentoUpload(ip, idLimpo);
-            }
-        } catch (err) {
-            console.error("Erro ao iniciar produção:", err);
-            if (loader) loader.style.display = 'none';
-        }
+        fetch('/imprimir', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ ip: ipAlvo, arquivo: arquivo })
+        }).then(r => {
+            if (r.ok) iniciarMonitoramentoUpload(ipAlvo, idLimpo); // ✅ Agora o IP está garantido
+        });
     };
 }
 /* =========================================================

@@ -701,14 +701,15 @@ def aguardar_estabilidade_arquivo(caminho, timeout=60):
 def tarefa_upload(ip_alvo, caminho_completo):
     nome_arquivo = os.path.basename(caminho_completo)
     try:
-        # 1. Aguarda estabilidade do Samba
+        # 🛡️ PASSO 1: Sincronia de Disco (Anti-Corte)
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": 2, "msg": "Sincronizando..."}
         if not aguardar_estabilidade_arquivo(caminho_completo):
-            raise Exception("Arquivo instável no servidor")
+            raise Exception("Erro: Arquivo incompleto no servidor")
 
         tamanho_local = os.path.getsize(caminho_completo)
 
         with UPLOAD_SEM:
-            # 2. Transmissão
+            # 🚀 PASSO 2: Envio para a Neptune
             PROGRESSO_UPLOAD[ip_alvo] = {"p": 5, "msg": "Transmitindo..."}
             with open(caminho_completo, 'rb') as f:
                 monitor = Monitor(f, ip_alvo)
@@ -716,23 +717,27 @@ def tarefa_upload(ip_alvo, caminho_completo):
                 resp = SESSAO_REDE.post(f"http://{ip_alvo}/server/files/upload", files=files, timeout=1800)
                 resp.raise_for_status()
 
-        # 🛡️ 3. VALIDAÇÃO DE ENGENHARIA (O Pulo do Gato)
-        time.sleep(3.0) # Tempo para o Klipper indexar
+        # 💾 PASSO 3: Validação de Bytes (A Trava Final)
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": 95, "msg": "Validando integridade..."}
+        time.sleep(3.0) # Tempo para o Klipper indexar o arquivo
+        
         check = SESSAO_REDE.get(f"http://{ip_alvo}/server/files/list?root=gcodes", timeout=10)
         if check.status_code == 200:
             arquivos = check.json().get('result', [])
-            meta = next((a for a in arquivos if a['path'] == nome_arquivo), None)
-            if meta and abs(meta['size'] - tamanho_local) > 1024:
+            # Procura o arquivo na memória da impressora e compara o tamanho
+            meta = next((a for a in arquivos if a.get('path') == nome_arquivo), None)
+            if meta and meta['size'] != tamanho_local:
                 raise Exception(f"Corte detectado: {meta['size']} de {tamanho_local} bytes")
 
-        # 4. Início Seguro
+        # ▶️ PASSO 4: Comando de Início Seguro
         PROGRESSO_UPLOAD[ip_alvo] = {"p": 98, "msg": "Iniciando..."}
         nome_url = urllib.parse.quote(nome_arquivo)
         SESSAO_REDE.post(f"http://{ip_alvo}/printer/print/start?filename={nome_url}", timeout=15)
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": 100, "msg": "Sucesso!"}
 
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": 100, "msg": "Sucesso!"}
+        
     except Exception as e:
-        print(f"🚨 Falha em {ip_alvo}: {e}")
+        print(f"🚨 Falha crítica em {ip_alvo}: {e}")
         PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": f"Erro: {str(e)[:30]}"}
         
 
