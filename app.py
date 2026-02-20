@@ -771,7 +771,7 @@ def index():
             # Caso a máquina ainda não tenha sido monitorada no primeiro boot
             lista_final[ip] = {'nome': m['nome'], 'ip': ip, 'status': 'offline', 'cor': 'offline', 'msg': 'CONECTANDO...', 'progresso': 0, 'imagem': 'n4max.png', 'modelo_real': 'Neptune 4 MAX'}
 
-    disponiveis = sum(1 for p in IMPRESSORAS_ENCONTRADAS.values() if p.get('status') in ['ready', 'idle'])
+    disponiveis = sum(1 for p in IMPRESSORAS_ENCONTRADAS.values() if p.get('cor') == 'ready')
     return render_template('index.html', impressoras=lista_final, disponiveis=disponiveis)
 
 @app.route('/cadastrar_impressora', methods=['POST'])
@@ -785,7 +785,7 @@ def cadastrar_impressora():
 # --- Rota de Status (Limpa) ---
 @app.route('/status_atualizado')
 def status_atualizado():
-    disponiveis = sum(1 for p in IMPRESSORAS_ENCONTRADAS.values() if p.get('status') in ['ready', 'idle'])
+    disponiveis = sum(1 for p in IMPRESSORAS_ENCONTRADAS.values() if p.get('cor') == 'ready')
     return jsonify({"impressoras": IMPRESSORAS_ENCONTRADAS, "total_disponiveis": disponiveis})
 
 @app.route('/imprimir', methods=['POST'])
