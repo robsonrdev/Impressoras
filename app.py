@@ -669,62 +669,60 @@ def enfileirar_impressao(ip, caminho_completo, arquivo_label=None):
 
 """Fila de impressão """
 
-def aguardar_estabilidade_arquivo(caminho, timeout=40):
-    """Verifica 3 vezes se o tamanho parou de mudar para garantir sincronia total"""
+def aguardar_estabilidade_arquivo(caminho, timeout=60):
+    """Garante que o Windows terminou de gravar o arquivo no Samba de Betim"""
     tamanho_anterior = -1
-    confirmacoes = 0
+    leituras_iguais = 0
     inicio = time.time()
     
     while time.time() - inicio < timeout:
         try:
             tamanho_atual = os.path.getsize(caminho)
             if tamanho_atual > 0 and tamanho_atual == tamanho_anterior:
-                confirmacoes += 1
-                if confirmacoes >= 3: # Precisa de 3 leituras iguais seguidas
+                leituras_iguais += 1
+                # ✅ Só libera se o tamanho ficar estático por 5 verificações
+                if leituras_iguais >= 5: 
                     return True
             else:
-                confirmacoes = 0
+                leituras_iguais = 0
             tamanho_anterior = tamanho_atual
         except: pass
-        time.sleep(1.5) # Aumentei o intervalo para o Samba respirar
+        time.sleep(1.2) 
     return False
 
 # --- LÓGICA DE UPLOAD ---
 def tarefa_upload(ip_alvo, caminho_completo):
     nome_arquivo = os.path.basename(caminho_completo)
     try:
-        # 1. Garante que o arquivo está 100% no disco de Betim
+        # 🛡️ PASSO 1: Sincronia de Disco (Anti-Corte)
         PROGRESSO_UPLOAD[ip_alvo] = {"p": 2, "msg": "Validando integridade..."}
         if not aguardar_estabilidade_arquivo(caminho_completo):
-            raise Exception("Timeout na sincronia do arquivo")
+            raise Exception("Erro: Arquivo incompleto no servidor")
 
         with UPLOAD_SEM:
-            PROGRESSO_UPLOAD[ip_alvo] = {"p": 5, "msg": "Iniciando transmissão..."}
-
+            # 🚀 PASSO 2: Envio para a Neptune 4 MAX
             with open(caminho_completo, 'rb') as f:
                 monitor = Monitor(f, ip_alvo)
                 files = {'file': (nome_arquivo, monitor)}
-                
                 resp = SESSAO_REDE.post(
                     f"http://{ip_alvo}/server/files/upload",
-                    files=files,
-                    timeout=1500 # Aumentado para gcodes gigantes
+                    files=files, timeout=1800
                 )
                 resp.raise_for_status()
 
-        # 2. Delay para o eMMC da impressora terminar de escrever
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": 98, "msg": "Gravando na memória..."}
-        time.sleep(3.0) 
+        # 💾 PASSO 3: Flush de Memória (Onde o erro costuma ocorrer)
+        # Força o Klipper a terminar de escrever o arquivo no eMMC
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": 98, "msg": "Finalizando gravação..."}
+        time.sleep(5.0) 
         
-        # 3. Comando de início
+        # ▶️ PASSO 4: Comando de Início Seguro
         nome_url = urllib.parse.quote(nome_arquivo)
-        SESSAO_REDE.post(f"http://{ip_alvo}/printer/print/start?filename={nome_url}", timeout=10)
+        SESSAO_REDE.post(f"http://{ip_alvo}/printer/print/start?filename={nome_url}", timeout=15)
 
         PROGRESSO_UPLOAD[ip_alvo] = {"p": 100, "msg": "Sucesso!"}
         
     except Exception as e:
-        print(f"🚨 Erro crítico no upload ({ip_alvo}): {e}")
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": f"Erro: {str(e)[:30]}"}
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": f"Erro: {str(e)[:35]}"}
 
 
 # --- Inicio Funcao Registrar Conclusao (Data Corrigida) ---

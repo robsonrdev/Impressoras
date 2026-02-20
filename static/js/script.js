@@ -150,90 +150,93 @@ function confirmarExclusaoImpressora() {
 
 /** 📂 Arquivos da Biblioteca Central (Servidor) */
 function imprimirArquivoBiblioteca(arquivoRelativo) {
-    if (!impressoraSelecionada) {
-        alert("Selecione uma impressora primeiro.");
-        return;
-    }
+    if (!impressoraSelecionada) return alert("Selecione uma impressora.");
 
-    // 1. POP-UP DE CONFIRMAÇÃO
-    const confirmacao = confirm(`📂 ENVIAR PARA FILA?\n\nArquivo: ${arquivoRelativo}\nDestino: ${nomeImpressoraSelecionada} (${impressoraSelecionada})`);
-    if (!confirmacao) return;
+    // ✅ FIX: Salva os dados em constantes locais para não perdê-los no fecharModal()
+    const ipAlvo = impressoraSelecionada;
+    const nomeAlvo = nomeImpressoraSelecionada;
+    const idLimpo = ipAlvo.split('.').join('-');
 
-    // 2. FEEDBACK NO BOTÃO
-    const btn = event.target;
-    const textoOriginal = btn.innerText;
-    btn.innerText = "PREPARANDO...";
-    btn.disabled = true;
+    if (!confirm(`📂 ENVIAR PARA FILA?\n\nArquivo: ${arquivoRelativo}\nDestino: ${nomeAlvo}`)) return;
 
-    // 3. ATIVA STATUS DE CARREGANDO NO CARD (Loader que você já tem)
-    const idLimpo = impressoraSelecionada.split('.').join('-');
     const loader = document.getElementById(`loader-${idLimpo}`);
     if (loader) loader.style.display = 'flex';
+
+    // ✅ Reset visual do progresso
+    PROGRESSO_UPLOAD[ipAlvo] = { p: 0, msg: "Iniciando..." };
 
     fetch('/api/imprimir_biblioteca', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ip: impressoraSelecionada, arquivo: arquivoRelativo })
+        body: JSON.stringify({ ip: ipAlvo, arquivo: arquivoRelativo })
     })
     .then(r => r.json())
     .then(res => {
         if (res.success) {
-            // Sucesso: Inicia o monitoramento da barra de progresso laranja
-            fecharModal();
-            iniciarMonitoramentoUpload(impressoraSelecionada, idLimpo);
+            fecharModal(); // Agora pode fechar, pois usamos ipAlvo abaixo
+            iniciarMonitoramentoUpload(ipAlvo, idLimpo);
         } else {
             alert("❌ Erro: " + res.message);
-            btn.innerText = textoOriginal;
-            btn.disabled = false;
-            if (loader) loader.style.display = 'none'; // Esconde se falhar
+            if (loader) loader.style.display = 'none';
         }
     })
     .catch(() => {
-        alert("🚨 Erro de conexão com o servidor de Betim.");
-        btn.innerText = textoOriginal;
-        btn.disabled = false;
+        alert("🚨 Erro de conexão com o servidor.");
         if (loader) loader.style.display = 'none';
     });
 }
-
 /* =========================================================
    4) ARQUIVOS INTERNOS - INICIAR PRODUÇÃO COM FEEDBACK
    ========================================================= */
 /** 💾 Arquivos da Memória Interna (Klipper) */
-function imprimirArquivoInterno(filename) {
+/** 💾 Arquivos da Memória Interna (Klipper) */
+function imprimirArquivoInterno(filename, event) { // ✅ Adicionamos 'event' como parâmetro
     if (!impressoraSelecionada) {
         alert("Selecione uma impressora primeiro.");
         return;
     }
 
+    // ✅ PASSO DE ENGENHARIA: Salva os dados antes de limpar o modal
+    const ipAlvo = impressoraSelecionada; 
+    const nomeAlvo = nomeImpressoraSelecionada;
+    const idLimpo = ipAlvo.split('.').join('-');
+
     // 1. POP-UP DE CONFIRMAÇÃO
-    const confirmacao = confirm(`🚀 INICIAR AGORA?\n\nArquivo: ${filename}\nImpressora: ${nomeImpressoraSelecionada}`);
+    const confirmacao = confirm(`🚀 INICIAR AGORA?\n\nArquivo: ${filename}\nImpressora: ${nomeAlvo}`);
     if (!confirmacao) return;
 
-    // 2. FEEDBACK NO BOTÃO
-    const btn = event.target;
-    const textoOriginal = btn.innerText;
-    btn.innerText = "SOLICITANDO...";
-    btn.disabled = true;
+    // 2. FEEDBACK NO BOTÃO (Usando o event passado pelo HTML)
+    const btn = event ? event.target : null;
+    let textoOriginal = "";
+    if (btn) {
+        textoOriginal = btn.innerText;
+        btn.innerText = "SOLICITANDO...";
+        btn.disabled = true;
+    }
 
     fetch('/api/imprimir_interno', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ip: impressoraSelecionada, filename })
+        body: JSON.stringify({ ip: ipAlvo, filename: filename }) // ✅ Usa a constante ipAlvo
     })
     .then(async r => {
         const res = await r.json();
         if (res.success) {
-            // Como é interno, o Klipper inicia quase instantaneamente
-            fecharModal();
+            // ✅ Agora podemos fechar o modal com segurança
+            fecharModal(); 
+            
+            // ✅ Opcional: Inicia o monitor para mostrar "Sucesso" no card principal
+            iniciarMonitoramentoUpload(ipAlvo, idLimpo); 
         } else {
             throw new Error(res.message || "Erro no Klipper");
         }
     })
     .catch(err => {
         alert("❌ Falha: " + err.message);
-        btn.innerText = textoOriginal;
-        btn.disabled = false;
+        if (btn) {
+            btn.innerText = textoOriginal;
+            btn.disabled = false;
+        }
     });
 }
 
@@ -477,7 +480,7 @@ function carregarArquivosInternos() {
                             <small class="file-size-tag">${tamanhoMB} MB</small>
                         </div>
                         <button class="btn-print-internal"
-                             onclick="imprimirArquivoInterno('${nomeArquivo.replace(/'/g, "\\'")}')">
+                             onclick="imprimirArquivoInterno('peça.gcode', event)">
                          IMPRIMIR
                     </button>
 
