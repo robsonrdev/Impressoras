@@ -637,18 +637,19 @@ def worker_upload(ip):
     fila = UPLOAD_FILAS[ip]
     while True:
         job = fila.get()
-        if job is None: break
+        if job is None:
+            break
 
         caminho = job.get("caminho")
         nome_exib = job.get("arquivo_label", os.path.basename(caminho))
 
-        # ✅ MELHORIA: Garante que o progresso comece em 1% para o JS detectar atividade
-        PROGRESSO_UPLOAD[ip] = {"p": 1, "msg": f"Iniciando: {nome_exib}"}
+        # ✅ Não "volta" progresso (evita 2% -> 1%)
+        PROGRESSO_UPLOAD[ip] = {"p": 0, "msg": f"Iniciando: {nome_exib}"}
 
         try:
             tarefa_upload(ip, caminho)
         except Exception as e:
-            PROGRESSO_UPLOAD[ip] = {"p": -1, "msg": f"Erro: {str(e)[:30]}"}
+            PROGRESSO_UPLOAD[ip] = {"p": -1, "msg": f"Erro: {str(e)[:60]}"}
         finally:
             fila.task_done()
 
@@ -738,6 +739,19 @@ def extrair_lista_arquivos_moonraker(json_data):
 def tarefa_upload(ip_alvo, caminho_completo):
     nome_arquivo = os.path.basename(caminho_completo)
 
+    def extrair_lista_arquivos_moonraker(payload: dict):
+        result = payload.get("result", [])
+
+        if isinstance(result, list):
+            return result
+
+        if isinstance(result, dict):
+            files = result.get("files", [])
+            if isinstance(files, list):
+                return files
+
+        return []
+
     try:
         # 🛡️ PASSO 1: Sincronia de Disco (Anti-Corte)
         PROGRESSO_UPLOAD[ip_alvo] = {"p": 2, "msg": "Sincronizando..."}
@@ -746,12 +760,8 @@ def tarefa_upload(ip_alvo, caminho_completo):
 
         tamanho_local = os.path.getsize(caminho_completo)
 
-        # ✅ Session local por upload (evita briga de threads no SESSAO_REDE global)
-        sess = requests.Session()
-        sess.headers.update({'Connection': 'keep-alive'})
-
         with UPLOAD_SEM:
-            # 🚀 PASSO 2: Envio para a Neptune
+            # 🚀 PASSO 2: Upload para o Moonraker
             PROGRESSO_UPLOAD[ip_alvo] = {"p": 5, "msg": "Transmitindo..."}
 
             with open(caminho_completo, 'rb') as f:
@@ -759,27 +769,27 @@ def tarefa_upload(ip_alvo, caminho_completo):
                 files = {'file': (nome_arquivo, monitor)}
 
                 url_upload = f"http://{ip_alvo}/server/files/upload"
-                resp = sess.post(url_upload, files=files, timeout=1800)
+                resp = SESSAO_REDE.post(url_upload, files=files, timeout=1800)
 
                 if resp.status_code >= 400:
                     body = (resp.text or "")[:300]
                     raise Exception(f"Falha upload HTTP {resp.status_code}: {body}")
 
-        # 💾 PASSO 3: Validação de Bytes (Robusta)
+        # 💾 PASSO 3: Validação de integridade (não confundir 200 com sucesso de parsing)
         PROGRESSO_UPLOAD[ip_alvo] = {"p": 95, "msg": "Validando integridade..."}
-        time.sleep(3.0)  # tempo para indexar
+        time.sleep(3.0)
 
         url_list = f"http://{ip_alvo}/server/files/list?root=gcodes"
-        check = sess.get(url_list, timeout=10)
+        check = SESSAO_REDE.get(url_list, timeout=10)
 
         if check.status_code == 200:
-            data = check.json()
-            arquivos = extrair_lista_arquivos_moonraker(data)
+            payload = check.json()
+            arquivos = extrair_lista_arquivos_moonraker(payload)
 
-            def bate(item):
-                p = (item.get('path') or item.get('filename') or '').replace("\\", "/")
-                # Alguns retornos podem vir como "gcodes/arquivo" ou só "arquivo"
-                return p == nome_arquivo or p.endswith("/" + nome_arquivo)
+            def bate(meta):
+                # meta deve ser dict
+                p = (meta.get('path') or '').replace("\\", "/")
+                return p == nome_arquivo or p.endswith("/" + nome_arquivo) or p.endswith("gcodes/" + nome_arquivo)
 
             meta = next((a for a in arquivos if isinstance(a, dict) and bate(a)), None)
 
@@ -787,16 +797,18 @@ def tarefa_upload(ip_alvo, caminho_completo):
                 if meta['size'] != tamanho_local:
                     raise Exception(f"Corte detectado: {meta['size']} de {tamanho_local} bytes")
             else:
-                print(f"⚠️ Aviso: arquivo '{nome_arquivo}' não localizado/sem size para validar.")
+                # não derruba o fluxo, mas registra
+                print(f"⚠️ Aviso: '{nome_arquivo}' não localizado/sem size na listagem para validar.")
         else:
             print(f"⚠️ Aviso: não foi possível listar arquivos (HTTP {check.status_code}).")
 
-        # ▶️ PASSO 4: Start
+        # ▶️ PASSO 4: Iniciar impressão
         PROGRESSO_UPLOAD[ip_alvo] = {"p": 98, "msg": "Iniciando..."}
         nome_url = urllib.parse.quote(nome_arquivo)
         url_start = f"http://{ip_alvo}/printer/print/start?filename={nome_url}"
 
-        resp_start = sess.post(url_start, timeout=15)
+        resp_start = SESSAO_REDE.post(url_start, timeout=15)
+
         if resp_start.status_code >= 400:
             body = (resp_start.text or "")[:200]
             raise Exception(f"Falha ao iniciar impressão HTTP {resp_start.status_code}: {body}")
