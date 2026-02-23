@@ -702,6 +702,39 @@ def aguardar_estabilidade_arquivo(caminho, timeout=60):
         
     return False
 
+def extrair_lista_arquivos_moonraker(json_data):
+    """
+    Normaliza o retorno do Moonraker /server/files/list para SEMPRE virar list[dict].
+
+    Formatos comuns:
+    A) {"result": [ ... ]}
+    B) {"result": {"files": [ ... ]}}
+    C) {"result": {"dirs": [...], "files": [...]}} (algumas variações)
+    """
+    if not isinstance(json_data, dict):
+        return []
+
+    result = json_data.get("result")
+
+    # Caso A: result já é lista
+    if isinstance(result, list):
+        return [x for x in result if isinstance(x, dict)]
+
+    # Caso B/C: result é dict
+    if isinstance(result, dict):
+        files = result.get("files")
+        if isinstance(files, list):
+            return [x for x in files if isinstance(x, dict)]
+
+        # fallback: algumas variações podem usar outra chave
+        maybe = result.get("result") or result.get("items")
+        if isinstance(maybe, list):
+            return [x for x in maybe if isinstance(x, dict)]
+
+    return []
+
+
+
 def tarefa_upload(ip_alvo, caminho_completo):
     nome_arquivo = os.path.basename(caminho_completo)
 
@@ -713,6 +746,10 @@ def tarefa_upload(ip_alvo, caminho_completo):
 
         tamanho_local = os.path.getsize(caminho_completo)
 
+        # ✅ Session local por upload (evita briga de threads no SESSAO_REDE global)
+        sess = requests.Session()
+        sess.headers.update({'Connection': 'keep-alive'})
+
         with UPLOAD_SEM:
             # 🚀 PASSO 2: Envio para a Neptune
             PROGRESSO_UPLOAD[ip_alvo] = {"p": 5, "msg": "Transmitindo..."}
@@ -722,50 +759,44 @@ def tarefa_upload(ip_alvo, caminho_completo):
                 files = {'file': (nome_arquivo, monitor)}
 
                 url_upload = f"http://{ip_alvo}/server/files/upload"
-                resp = SESSAO_REDE.post(url_upload, files=files, timeout=1800)
+                resp = sess.post(url_upload, files=files, timeout=1800)
 
-                # ✅ Melhora: se der erro, mostra mais contexto
                 if resp.status_code >= 400:
                     body = (resp.text or "")[:300]
                     raise Exception(f"Falha upload HTTP {resp.status_code}: {body}")
 
-        # 💾 PASSO 3: Validação de Bytes (A Trava Final)
+        # 💾 PASSO 3: Validação de Bytes (Robusta)
         PROGRESSO_UPLOAD[ip_alvo] = {"p": 95, "msg": "Validando integridade..."}
-        time.sleep(3.0)  # Tempo para o Klipper indexar o arquivo
+        time.sleep(3.0)  # tempo para indexar
 
         url_list = f"http://{ip_alvo}/server/files/list?root=gcodes"
-        check = SESSAO_REDE.get(url_list, timeout=10)
+        check = sess.get(url_list, timeout=10)
 
         if check.status_code == 200:
             data = check.json()
-            arquivos = data.get('result', [])
+            arquivos = extrair_lista_arquivos_moonraker(data)
 
-            # ✅ Ajuste: path pode vir como "gcodes/arquivo" ou "subpasta/arquivo"
-            def bate(a):
-                p = (a.get('path') or '').replace("\\", "/")
+            def bate(item):
+                p = (item.get('path') or item.get('filename') or '').replace("\\", "/")
+                # Alguns retornos podem vir como "gcodes/arquivo" ou só "arquivo"
                 return p == nome_arquivo or p.endswith("/" + nome_arquivo)
 
-            meta = next((a for a in arquivos if bate(a)), None)
+            meta = next((a for a in arquivos if isinstance(a, dict) and bate(a)), None)
 
-            # Se encontrou, valida tamanho
             if meta and isinstance(meta.get('size'), int):
                 if meta['size'] != tamanho_local:
                     raise Exception(f"Corte detectado: {meta['size']} de {tamanho_local} bytes")
-            # Se não encontrou, não derruba o fluxo, mas registra aviso
             else:
-                print(f"⚠️ Aviso: arquivo '{nome_arquivo}' não localizado na listagem para validar tamanho.")
+                print(f"⚠️ Aviso: arquivo '{nome_arquivo}' não localizado/sem size para validar.")
         else:
             print(f"⚠️ Aviso: não foi possível listar arquivos (HTTP {check.status_code}).")
 
-        # ▶️ PASSO 4: Comando de Início Seguro
+        # ▶️ PASSO 4: Start
         PROGRESSO_UPLOAD[ip_alvo] = {"p": 98, "msg": "Iniciando..."}
         nome_url = urllib.parse.quote(nome_arquivo)
         url_start = f"http://{ip_alvo}/printer/print/start?filename={nome_url}"
 
-        resp_start = SESSAO_REDE.post(url_start, timeout=15)
-
-        # Se falhar o start, você pode optar por não derrubar o upload,
-        # mas aqui mantive coerente: se falhar, retorna erro.
+        resp_start = sess.post(url_start, timeout=15)
         if resp_start.status_code >= 400:
             body = (resp_start.text or "")[:200]
             raise Exception(f"Falha ao iniciar impressão HTTP {resp_start.status_code}: {body}")
@@ -775,6 +806,8 @@ def tarefa_upload(ip_alvo, caminho_completo):
     except Exception as e:
         print(f"🚨 Falha crítica em {ip_alvo}: {e}")
         PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": f"Erro: {str(e)[:60]}"}
+
+
 
 @app.route('/progresso_transmissao/<ip>')
 def progresso_transmissao(ip):
@@ -852,20 +885,32 @@ def status_atualizado():
 
 @app.route('/imprimir', methods=['POST'])
 def imprimir():
-    dados = request.json
-    ip = dados.get('ip')
-    arquivo = dados.get('arquivo')
+    dados = request.json or {}
+    ip = (dados.get('ip') or '').strip()
+    arquivo = (dados.get('arquivo') or '').strip()
 
     if not ip or not arquivo:
         return jsonify({"success": False, "message": "Dados incompletos"}), 400
 
+    # ✅ Normaliza caminho vindo do front
+    arquivo = arquivo.replace("\\", "/").strip()
+    arquivo = arquivo.lstrip("/")  # evita join ignorar PASTA_RAIZ
+
+    # ✅ Bloqueia tentativa de sair da raiz
+    if ".." in arquivo.split("/"):
+        return jsonify({"success": False, "message": "Caminho inválido"}), 400
+
     caminho = os.path.abspath(os.path.join(PASTA_RAIZ, arquivo))
-    
-    # ✅ Validação imediata de segurança
+
+    # ✅ trava extra: caminho final precisa ficar dentro da raiz
+    raiz_abs = os.path.abspath(PASTA_RAIZ)
+    if not caminho.startswith(raiz_abs):
+        return jsonify({"success": False, "message": "Acesso negado"}), 403
+
     if not os.path.exists(caminho):
         return jsonify({"success": False, "message": "Arquivo ainda não chegou no servidor"}), 404
 
-    # Limpa o status antigo para evitar o "100% fantasma" no dashboard
+    # Limpa status antigo para evitar 100% fantasma
     PROGRESSO_UPLOAD[ip] = {"p": 0, "msg": "Entrando na fila..."}
 
     enfileirar_impressao(ip, caminho, arquivo_label=os.path.basename(caminho))
@@ -932,35 +977,28 @@ def navegar():
         print(f"🚨 Falha na Rota Navegar: {str(e)}")
         return jsonify({"error": f"Erro interno no servidor: {str(e)}"}), 500
     
-
 @app.route('/api/arquivos_internos/<ip>')
 def arquivos_internos(ip):
-    """Busca a lista de arquivos gcodes salvos dentro da Neptune 4 MAX"""
+    """Busca a lista de arquivos gcodes salvos dentro da impressora"""
     try:
         url = f"http://{ip}/server/files/list?root=gcodes"
-        
-        # Faz a requisição para a impressora
         resp = SESSAO_REDE.get(url, timeout=3.0)
-        
-        if resp.status_code == 200:
-            # 1. Transformamos a resposta em um dicionário Python (JSON)
-            dados = resp.json()
-            
-            # 2. BUSCA CORRETA: Pegamos a lista de arquivos dentro da chave 'result'
-            lista_arquivos = dados.get('result', [])
-            
-            # 3. Ordena: os mais recentes (modified) aparecem primeiro
-            arquivos_ordenados = sorted(
-                lista_arquivos, 
-                key=lambda x: x.get('modified', 0), 
-                reverse=True
-            )
-            return jsonify(arquivos_ordenados)
-        else:
+
+        if resp.status_code != 200:
             return jsonify({"error": f"Erro {resp.status_code} na impressora"}), resp.status_code
 
+        dados = resp.json()
+        lista_arquivos = extrair_lista_arquivos_moonraker(dados)
+
+        # Ordena por modified desc (se existir)
+        arquivos_ordenados = sorted(
+            [a for a in lista_arquivos if isinstance(a, dict)],
+            key=lambda x: x.get('modified', 0) or 0,
+            reverse=True
+        )
+        return jsonify(arquivos_ordenados)
+
     except Exception as e:
-        # Se houver erro de rede ou lógica, retorna 500 com a mensagem do erro
         print(f"🚨 Erro interno na rota arquivos_internos ({ip}): {e}")
         return jsonify({"error": str(e)}), 500
 

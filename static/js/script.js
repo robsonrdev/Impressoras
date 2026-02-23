@@ -166,51 +166,52 @@ function confirmarExclusaoImpressora() {
     }
 }
 
-/** 📂 Arquivos da Biblioteca Central (Servidor) */
 function imprimirArquivoBiblioteca(arquivoRelativo) {
-    if (!impressoraSelecionada) return alert("Selecione uma impressora primeiro.");
+  if (!impressoraSelecionada) return alert("Selecione uma impressora primeiro.");
 
-    // 🛡️ TRAVA DE ENGENHARIA: Salva o IP antes de fechar o modal
-    const ipAlvo = impressoraSelecionada;
-    const nomeAlvo = nomeImpressoraSelecionada;
-    const idLimpo = ipAlvo.split('.').join('-');
+  // 🛡️ trava os dados antes de fechar modal / trocar estado
+  const ipAlvo = impressoraSelecionada;
+  const nomeAlvo = nomeImpressoraSelecionada;
+  const idLimpo = ipAlvo.split('.').join('-');
 
-    // 1. Confirmação para evitar gasto de filamento acidental
-    if (!confirm(`🚀 INICIAR PRODUÇÃO?\n\nArquivo: ${arquivoRelativo}\nDestino: ${nomeAlvo}`)) return;
+  if (!confirm(`🚀 INICIAR PRODUÇÃO?\n\nArquivo: ${arquivoRelativo}\nDestino: ${nomeAlvo}`)) return;
 
-    // 2. Ativa o loader visual IMEDIATAMENTE no card da farm
-    const loader = document.getElementById(`loader-${idLimpo}`);
-    if (loader) loader.style.display = 'flex';
+  const loader = document.getElementById(`loader-${idLimpo}`);
+  if (loader) loader.style.display = 'flex';
 
-    // 3. Chamada da Rota Flask
-    fetch('/imprimir', { // ✅ Usando a rota principal do seu app.py
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-            ip: ipAlvo, 
-            arquivo: arquivoRelativo 
-        })
-    })
-    .then(r => {
-        if (!r.ok) throw new Error(`Erro HTTP: ${r.status}`);
-        return r.json();
-    })
-    .then(res => {
-        if (res.success) {
-            // ✅ Agora fechamos o modal, pois o ipAlvo está seguro na constante
-            fecharModal(); 
-            
-            // ✅ Inicia o monitoramento da barra laranja no card
-            iniciarMonitoramentoUpload(ipAlvo, idLimpo);
-        } else {
-            throw new Error(res.message || "Erro desconhecido no servidor");
-        }
-    })
-    .catch(err => {
-        console.error("🚨 Falha na transmissão:", err);
-        alert("❌ Erro ao enviar arquivo. Verifique a rede de Betim.");
-        if (loader) loader.style.display = 'none'; // Esconde o loader se falhar
-    });
+  fetch('/imprimir', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ip: ipAlvo, arquivo: arquivoRelativo })
+  })
+  .then(async (r) => {
+    const txt = await r.text().catch(() => '');
+    let payload = null;
+    try { payload = JSON.parse(txt); } catch {}
+
+    // ✅ Se HTTP falhou, mostra o retorno real
+    if (!r.ok) {
+      console.error("Resposta /imprimir (HTTP):", r.status, txt);
+      throw new Error(payload?.message || `Erro HTTP: ${r.status}`);
+    }
+
+    // ✅ Se veio 200 mas success false, também trata como erro
+    if (payload && payload.success === false) {
+      console.error("Resposta /imprimir (success=false):", payload);
+      throw new Error(payload.message || "Falha ao iniciar impressão no servidor.");
+    }
+
+    return payload || { success: true };
+  })
+  .then(() => {
+    fecharModal();
+    iniciarMonitoramentoUpload(ipAlvo, idLimpo);
+  })
+  .catch(err => {
+    console.error("🚨 Falha na transmissão:", err);
+    alert(`❌ Erro ao enviar arquivo.\n\nDetalhe: ${err.message}`);
+    if (loader) loader.style.display = 'none';
+  });
 }
 /* =========================================================
    4) ARQUIVOS INTERNOS - INICIAR PRODUÇÃO COM FEEDBACK
@@ -552,11 +553,10 @@ function recuperarEstadoUploads() {
             });
     });
 }
-
 function iniciarMonitoramentoUpload(ip, idLimpo) {
   if (!ip) return;
 
-  // evita criar 2 loops pro mesmo IP
+  // ✅ Evita dois loops simultâneos pro mesmo IP
   if (uploadsAtivos[ip]) {
     clearInterval(uploadsAtivos[ip]);
     delete uploadsAtivos[ip];
@@ -575,10 +575,26 @@ function iniciarMonitoramentoUpload(ip, idLimpo) {
 
   uploadsAtivos[ip] = setInterval(async () => {
     try {
-      const resp = await fetch(`/progresso_transmissao/${ip}`);
-      const d = await resp.json();
+      const resp = await fetch(`/progresso_transmissao/${ip}`, { cache: 'no-store' });
 
-      // se não tem status ainda, não mexe no UI
+      // Se deu erro HTTP, loga e tenta novamente no próximo ciclo
+      if (!resp.ok) {
+        const txt = await resp.text().catch(() => '');
+        console.warn(`progresso_transmissao HTTP ${resp.status} (${ip}):`, txt.slice(0, 300));
+        return;
+      }
+
+      // Tenta ler JSON de forma segura
+      const txt = await resp.text();
+      let d = null;
+      try {
+        d = JSON.parse(txt);
+      } catch (e) {
+        console.warn(`progresso_transmissao retornou não-JSON (${ip}):`, txt.slice(0, 300));
+        return;
+      }
+
+      // Se não tem status ainda, não mexe no UI
       if (!d || typeof d.p !== 'number' || d.msg === '...') return;
 
       const msgEl = document.querySelector(`#loader-${idLimpo} .status-msg`);
@@ -587,24 +603,23 @@ function iniciarMonitoramentoUpload(ip, idLimpo) {
       if (pct)  pct.innerText = `${d.p}%`;
       if (msgEl) msgEl.innerText = d.msg;
 
-      // ignora 100% fantasma (de estado anterior)
+      // Ignora 100% fantasma (de estado anterior)
       if (d.p >= 100 && ciclosIgnorados < 2) {
         ciclosIgnorados++;
         return;
       }
 
-      // terminou ou deu erro
+      // Terminou ou deu erro
       if (d.p >= 100 || d.p === -1) {
         clearInterval(uploadsAtivos[ip]);
         delete uploadsAtivos[ip];
         setTimeout(() => finalizarVisualUpload(idLimpo), 2000);
       }
     } catch (err) {
-      console.warn("Aguardando servidor de Betim...", err);
+      console.warn("Aguardando servidor de Betim...", ip, err);
     }
   }, 1000);
 }
-
 
 function finalizarVisualUpload(idLimpo) {
     const loader = document.getElementById(`loader-${idLimpo}`);
