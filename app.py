@@ -79,11 +79,40 @@ PROGRESSO_UPLOAD = {}
 ARQUIVO_PRODUCAO = 'producao_diaria.json'
 ULTIMO_STATUS_MAQUINAS = {} # Para detectar a transição de status
 
-# --- ESTABILIDADE DE REDE ---
-SESSAO_REDE = requests.Session()
-SESSAO_REDE.headers.update({'Connection': 'keep-alive'})
+
 FALHAS_CONSECUTIVAS = {}
 
+
+thread_local = threading.local()
+
+def get_session():
+    """
+    Uma requests.Session por thread => thread-safe.
+    Evita comportamento doido quando várias threads usam a mesma Session.
+    """
+    if not hasattr(thread_local, "sess"):
+        s = requests.Session()
+        s.headers.update({"Connection": "keep-alive"})
+        thread_local.sess = s
+    return thread_local.sess
+
+def http_get(url, timeout=3.0):
+    sess = get_session()
+    return sess.get(url, timeout=timeout)
+
+def http_post(url, timeout=5.0, **kwargs):
+    sess = get_session()
+    return sess.post(url, timeout=timeout, **kwargs)
+
+# =========================================================
+# SEGURANÇA: BLOQUEIO DE COMANDOS QUE RESTARTAM O KLIPPER
+# =========================================================
+COMANDOS_BLOQUEADOS = {"FIRMWARE_RESTART", "RESTART", "SAVE_CONFIG"}
+def comando_perigoso(cmd: str) -> bool:
+    if not cmd:
+        return False
+    up = cmd.upper()
+    return any(x in up for x in COMANDOS_BLOQUEADOS)
 
 class Maquina(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -436,17 +465,17 @@ def adicionar_estoque():
 
 @app.route('/api/detalhes_profundos/<ip>')
 def detalhes_profundos(ip):
-    """Busca Temperaturas e Console com tratamento de erro robusto"""
+    """Busca Temperaturas e Console com tratamento robusto e thread-safe"""
     try:
         # ✅ TRAVA: se estiver enviando/starting, não martela a impressora
         if is_busy(ip):
             return jsonify({"status": {}, "console": []})
 
         url_status = f"http://{ip}/printer/objects/query?extruder&heater_bed&print_stats&display_status"
-        resp_s = SESSAO_REDE.get(url_status, timeout=1.5)
-
         url_console = f"http://{ip}/server/gcode_store"
-        resp_c = SESSAO_REDE.get(url_console, timeout=1.5)
+
+        resp_s = http_get(url_status, timeout=1.5)
+        resp_c = http_get(url_console, timeout=1.5)
 
         if resp_s.status_code == 200 and resp_c.status_code == 200:
             dados_s = resp_s.json()
@@ -459,14 +488,13 @@ def detalhes_profundos(ip):
             }
             return jsonify(result)
 
-        print(f"⚠️ detalhes_profundos: {ip} respondeu {resp_s.status_code}/{resp_c.status_code}", flush=True)
+        log(ip, "DETALHES_HTTP", f"status={resp_s.status_code}/{resp_c.status_code}")
         return jsonify({"status": {}, "console": []})
 
     except Exception as e:
-        # ✅ NÃO “grita” aqui durante o envio (isso suja o terminal e confunde)
-        # mas se quiser manter, deixe.
-        print(f"⚠️ detalhes_profundos falhou ({ip}): {e}", flush=True)
+        log(ip, "DETALHES_FAIL", str(e))
         return jsonify({"status": {}, "console": []})
+
 
 # --- 3) Rota Imprimir Interno (Arquivos da Memória da Impressora) ---
 @app.route('/api/imprimir_interno', methods=['POST'])
@@ -479,51 +507,71 @@ def imprimir_interno():
     if not ip or not filename:
         return jsonify({"success": False, "message": "IP ou Nome do arquivo ausentes"}), 400
 
+    log(ip, "IMPRIMIR_INTERNO", f"Requisitado | filename={filename}")
+
     try:
-        # Codifica o nome para garantir que o Klipper entenda espaços no nome
         nome_url = urllib.parse.quote(filename)
         url = f"http://{ip}/printer/print/start?filename={nome_url}"
-        
-        # Timeout estendido para 15s para dar tempo do hardware responder
-        resp = SESSAO_REDE.post(url, timeout=15.0)
-        
+
+        resp = http_post(url, timeout=15.0)
+        log(ip, "IMPRIMIR_INTERNO", f"Resposta | status={resp.status_code} | body={(resp.text or '')[:200]}")
+
         if resp.status_code == 200:
             return jsonify({"success": True, "message": f"Impressão de '{filename}' iniciada!"})
         else:
-            return jsonify({"success": False, "message": f"Erro na impressora: Status {resp.status_code}"})
+            return jsonify({"success": False, "message": f"Erro na impressora: Status {resp.status_code}"}), 400
 
-    except Exception:
+    except Exception as e:
+        log(ip, "IMPRIMIR_INTERNO_FAIL", str(e))
         # Se der timeout mas o sinal sair, retornamos sucesso para não travar a UI
         return jsonify({"success": True, "message": "Comando enviado com sucesso!"})
+    
 
 @app.route('/api/comando_gcode', methods=['POST'])
 def comando_gcode():
-    """Envia comandos manuais (Pausa, Cancela, G-Code)"""
-    dados = request.json
+    """Envia comandos manuais (Pausa, Cancela, G-Code) com logs e segurança"""
+    dados = request.json or {}
     ip = dados.get('ip')
-    comando = dados.get('comando') # Ex: "PAUSE", "CANCEL", "G28"
-    
+    comando = (dados.get('comando') or '').strip()
+
+    if not ip or not comando:
+        return jsonify({"success": False, "message": "ip/comando ausentes"}), 400
+
+    log(ip, "CMD", f"Recebido comando: {comando}")
+
+    # ✅ bloqueia restart do klipper por acidente
+    if comando_perigoso(comando):
+        log(ip, "CMD_BLOCK", f"Bloqueado: {comando}")
+        return jsonify({"success": False, "message": "Comando bloqueado por segurança"}), 403
+
     try:
-        # Traduz comandos simples para a API do Klipper
-        if comando == "PAUSE": url = f"http://{ip}/printer/print/pause"
-        elif comando == "RESUME": url = f"http://{ip}/printer/print/resume"
-        elif comando == "CANCEL": url = f"http://{ip}/printer/print/cancel"
-        else: url = f"http://{ip}/printer/gcode/script?script={urllib.parse.quote(comando)}"
-        
-        SESSAO_REDE.post(url, timeout=5.0)
+        if comando == "PAUSE":
+            url = f"http://{ip}/printer/print/pause"
+        elif comando == "RESUME":
+            url = f"http://{ip}/printer/print/resume"
+        elif comando == "CANCEL":
+            url = f"http://{ip}/printer/print/cancel"
+        else:
+            url = f"http://{ip}/printer/gcode/script?script={urllib.parse.quote(comando)}"
+
+        log(ip, "CMD", f"POST {url}")
+        resp = http_post(url, timeout=5.0)
+        log(ip, "CMD", f"Resposta status={resp.status_code} | body={(resp.text or '')[:200]}")
+
         return jsonify({"success": True})
+
     except Exception as e:
-        return jsonify({"success": False, "message": str(e)})
+        log(ip, "CMD_FAIL", str(e))
+        return jsonify({"success": False, "message": str(e)}), 500
+
 
 # --- Inicio Bloco de Segurança verificar_ip ---
-# --- Inicio Funcao verificar_ip (Versão Final Limpa) ---
 def verificar_ip(ip, nome_personalizado):
     """
-    Monitora a impressora e atualiza o estado global.
+    Monitora a impressora e atualiza o estado global (thread-safe).
     """
     # ✅ TRAVA: se estiver enviando/starting, não consulta API (evita derrubar wifi/porta)
     if is_busy(ip):
-        # Mantém o último status sem “derrubar” a impressora no dashboard
         if ip in IMPRESSORAS_ENCONTRADAS:
             return
         IMPRESSORAS_ENCONTRADAS[ip] = {
@@ -553,16 +601,17 @@ def verificar_ip(ip, nome_personalizado):
         return
 
     url = f"http://{ip}/printer/objects/query?print_stats&display_status"
+
     try:
-        resp = SESSAO_REDE.get(url, timeout=3.0)
+        resp = http_get(url, timeout=3.0)
 
         if resp.status_code == 200:
             FALHAS_CONSECUTIVAS[ip] = 0
-            dados = resp.json()['result']['status']
+            dados = resp.json().get('result', {}).get('status', {})
 
-            status_klipper = dados['print_stats']['state']
-            filename = dados['print_stats']['filename']
-            progresso = int(dados['display_status']['progress'] * 100)
+            status_klipper = (dados.get('print_stats') or {}).get('state')
+            filename = (dados.get('print_stats') or {}).get('filename')
+            progresso = int(((dados.get('display_status') or {}).get('progress') or 0) * 100)
 
             status_anterior = ULTIMO_STATUS_MAQUINAS.get(ip)
             if status_anterior == "printing" and status_klipper == "complete":
@@ -585,25 +634,42 @@ def verificar_ip(ip, nome_personalizado):
             IMPRESSORAS_ENCONTRADAS[ip] = {
                 'nome': nome_personalizado,
                 'ip': ip,
-                'status': status_klipper,
+                'status': status_klipper or "unknown",
                 'cor': cor_status,
                 'msg': msg_exibicao,
                 'progresso': progresso,
                 'imagem': "n4max.png",
                 'arquivo': filename or "Nenhum"
             }
+            return
 
-    except Exception:
-        IMPRESSORAS_ENCONTRADAS[ip] = {
-            'nome': nome_personalizado,
-            'ip': ip,
-            'status': 'offline',
-            'cor': 'offline',
-            'msg': 'OFFLINE',
-            'progresso': 0,
-            'imagem': 'n4max.png'
-        }
-# --- Fim Funcao verificar_ip ---
+        # se não for 200, incrementa falhas
+        FALHAS_CONSECUTIVAS[ip] = FALHAS_CONSECUTIVAS.get(ip, 0) + 1
+        if FALHAS_CONSECUTIVAS[ip] >= 2:
+            IMPRESSORAS_ENCONTRADAS[ip] = {
+                'nome': nome_personalizado,
+                'ip': ip,
+                'status': 'offline',
+                'cor': 'offline',
+                'msg': 'OFFLINE',
+                'progresso': 0,
+                'imagem': 'n4max.png'
+            }
+        log(ip, "STATUS_HTTP", f"HTTP {resp.status_code}")
+
+    except Exception as e:
+        FALHAS_CONSECUTIVAS[ip] = FALHAS_CONSECUTIVAS.get(ip, 0) + 1
+        if FALHAS_CONSECUTIVAS[ip] >= 2:
+            IMPRESSORAS_ENCONTRADAS[ip] = {
+                'nome': nome_personalizado,
+                'ip': ip,
+                'status': 'offline',
+                'cor': 'offline',
+                'msg': 'OFFLINE',
+                'progresso': 0,
+                'imagem': 'n4max.png'
+            }
+        log(ip, "STATUS_FAIL", str(e))
 
 
 @app.route('/api/imprimir_biblioteca', methods=['POST'])
@@ -631,18 +697,24 @@ def imprimir_biblioteca():
 def monitor_inteligente():
     """Motor principal que mantém a sincronia com o SQLite"""
     while True:
-        with app.app_context():
-            try:
+        try:
+            with app.app_context():
                 maquinas = carregar_maquinas()
-                if maquinas:
-                    with ThreadPoolExecutor(max_workers=15) as executor:
-                        for m in maquinas:
-                            executor.submit(
-                                lambda p: app.app_context().push() or verificar_ip(p['ip'], p['nome']), 
-                                m
-                            )
-            except Exception:
-                pass # Erros silenciosos para não poluir o terminal
+
+            if maquinas:
+                # cada task abre seu próprio app_context com segurança
+                def task(m):
+                    with app.app_context():
+                        verificar_ip(m['ip'], m['nome'])
+
+                with ThreadPoolExecutor(max_workers=15) as executor:
+                    list(executor.map(task, maquinas))
+
+        except Exception as e:
+            # silencioso, mas se quiser ver:
+            # print("monitor_inteligente erro:", e, flush=True)
+            pass
+
         time.sleep(3)
 
 """Fila de impressão """
@@ -763,6 +835,7 @@ def extrair_lista_arquivos_moonraker(json_data):
 
 def tarefa_upload(ip_alvo, caminho_completo):
     nome_arquivo = os.path.basename(caminho_completo)
+    log(ip_alvo, "JOB", f"JOB recebido | caminho={caminho_completo} | arquivo={nome_arquivo}")
 
     def set_prog(p, msg):
         PROGRESSO_UPLOAD[ip_alvo] = {"p": p, "msg": msg}
@@ -797,10 +870,14 @@ def tarefa_upload(ip_alvo, caminho_completo):
                 url_upload = f"http://{ip_alvo}/server/files/upload"
                 log(ip_alvo, "UPLOAD", f"POST {url_upload}")
 
-                resp = sess.post(url_upload, files=files, timeout=1800)
+                resp = sess.post(url_upload, files=files, timeout=(5.0, 1800))
                 log(ip_alvo, "UPLOAD", f"status={resp.status_code}")
+                log(ip_alvo, "UPLOAD_OK", f"Upload finalizado | status={resp.status_code} | size_local={tamanho_local}")
+                if st.status_code != 200:
+                    log(ip_alvo, "VALIDATE_BAD", f"HTTP {st.status_code} | body={(st.text or '')[:200]}")
 
                 if resp.status_code >= 400:
+                    log(ip_alvo, "UPLOAD_OK", f"Upload finalizado | status={resp.status_code} | size_local={tamanho_local}")
                     body = (resp.text or "")[:300]
                     raise Exception(f"Falha upload HTTP {resp.status_code}: {body}")
 
@@ -825,6 +902,7 @@ def tarefa_upload(ip_alvo, caminho_completo):
         set_prog(95, "Iniciando impressão (start)")
 
         nome_url = urllib.parse.quote(nome_arquivo)
+        log(ip_alvo, "JOB", f"JOB recebido | caminho={caminho_completo} | arquivo={nome_arquivo}")
         url_start = f"http://{ip_alvo}/printer/print/start?filename={nome_url}"
         log(ip_alvo, "START_PRINT", f"POST {url_start}")
 
@@ -853,6 +931,8 @@ def tarefa_upload(ip_alvo, caminho_completo):
         while time.time() - inicio < 25:
             try:
                 st = sess.get(url_state, timeout=3.0)
+                if st.status_code != 200:
+                    log(ip_alvo, "VALIDATE_BAD", f"HTTP {st.status_code} | body={(st.text or '')[:200]}")
                 if st.status_code == 200:
                     dados = st.json().get("result", {}).get("status", {})
                     state = dados.get("print_stats", {}).get("state")
@@ -879,7 +959,7 @@ def tarefa_upload(ip_alvo, caminho_completo):
     finally:
         set_busy(ip_alvo, False)
         sess.close()
-        
+
 @app.route('/progresso_transmissao/<ip>')
 def progresso_transmissao(ip):
     """
@@ -1053,15 +1133,15 @@ def arquivos_internos(ip):
     """Busca a lista de arquivos gcodes salvos dentro da impressora"""
     try:
         url = f"http://{ip}/server/files/list?root=gcodes"
-        resp = SESSAO_REDE.get(url, timeout=3.0)
+        resp = http_get(url, timeout=3.0)
 
         if resp.status_code != 200:
+            log(ip, "ARQ_INT_HTTP", f"HTTP {resp.status_code}")
             return jsonify({"error": f"Erro {resp.status_code} na impressora"}), resp.status_code
 
         dados = resp.json()
         lista_arquivos = extrair_lista_arquivos_moonraker(dados)
 
-        # Ordena por modified desc (se existir)
         arquivos_ordenados = sorted(
             [a for a in lista_arquivos if isinstance(a, dict)],
             key=lambda x: x.get('modified', 0) or 0,
@@ -1070,7 +1150,7 @@ def arquivos_internos(ip):
         return jsonify(arquivos_ordenados)
 
     except Exception as e:
-        print(f"🚨 Erro interno na rota arquivos_internos ({ip}): {e}")
+        log(ip, "ARQ_INT_FAIL", str(e))
         return jsonify({"error": str(e)}), 500
 
 # --- Inicio Rota Remover Impressora ---
