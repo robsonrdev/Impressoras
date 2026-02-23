@@ -17,6 +17,10 @@ from flask_sqlalchemy import SQLAlchemy
 from datetime import timezone
 from datetime import datetime
 
+def log(ip, etapa, msg):
+    agora = datetime.now().strftime("%H:%M:%S")
+    print(f"[{agora}] [{ip}] [{etapa}] {msg}", flush=True)
+
 
 app = Flask(__name__)
 
@@ -173,51 +177,50 @@ def salvar_maquina(ip, nome):
 class Monitor:
     def __init__(self, file, ip_alvo):
         self.file = file
-        # ✅ Ponto Crítico: O total deve ser o tamanho real do arquivo estabilizado
         self.total = os.path.getsize(file.name)
         self.bytes_read = 0
         self.ip_alvo = ip_alvo
 
-        # Controle de atualização para não sobrecarregar o Flask/Frontend
         self._last_update = 0.0
-        self._min_interval = 0.20  # Reduzi para 200ms para uma barra mais fluida
+        self._min_interval = 0.3
+
+        log(ip_alvo, "MONITOR", f"Iniciado | size={self.total}")
 
     def read(self, size=-1):
-        # Mantemos a leitura em blocos de 256KB para eficiência na rede de Betim
-        if size is None or size < 256 * 1024:
-            size = 256 * 1024 
+        try:
+            if size is None or size < 256 * 1024:
+                size = 256 * 1024
 
-        data = self.file.read(size)
-        len_data = len(data)
-        self.bytes_read += len_data
+            data = self.file.read(size)
+            n = len(data)
+            self.bytes_read += n
 
-        now = time.time()
-        if self.total > 0:
-            # Calculamos a porcentagem real da transmissão (0 a 100)
-            percent = int((self.bytes_read / self.total) * 100)
-            
-            # Atualiza apenas se o intervalo passou ou se chegamos ao fim
-            if (now - self._last_update) >= self._min_interval or self.bytes_read >= self.total:
-                self._last_update = now
-                
-                # ✅ Lógica de Feedback:
-                # De 0 a 99% é transmissão de rede.
-                # 100% significa que o Klipper recebeu tudo e está gravando no disco interno.
-                msg = f"Transmitindo... ({percent}%)"
-                if percent >= 100:
-                    msg = "Finalizando gravação na impressora..."
+            now = time.time()
 
-                PROGRESSO_UPLOAD[self.ip_alvo] = {
-                    "p": percent,
-                    "msg": msg
-                }
+            if self.total > 0:
+                percent = int((self.bytes_read / self.total) * 100)
 
-        return data
+                if (now - self._last_update) >= self._min_interval or self.bytes_read >= self.total:
+                    self._last_update = now
+
+                    msg = f"[UPLOAD] {percent}%"
+                    if percent >= 100:
+                        msg = "[UPLOAD] Finalizando..."
+
+                    PROGRESSO_UPLOAD[self.ip_alvo] = {"p": percent, "msg": msg}
+
+                    log(self.ip_alvo, "UPLOAD", f"{percent}% ({self.bytes_read}/{self.total})")
+
+            return data
+
+        except Exception as e:
+            log(self.ip_alvo, "ERRO_MONITOR", str(e))
+            PROGRESSO_UPLOAD[self.ip_alvo] = {"p": -1, "msg": "[MONITOR] erro"}
+            raise
 
     def __getattr__(self, attr):
-        # Repassa chamadas como .name ou .close() para o objeto de arquivo original
         return getattr(self.file, attr)
-
+    
 
 # --- FUNÇÕES DE REDE E MONITORAMENTO ---
 def testar_conexao_rapida(ip, porta=80):
@@ -635,40 +638,42 @@ def garantir_fila(ip):
 
 def worker_upload(ip):
     fila = UPLOAD_FILAS[ip]
+    log(ip, "WORKER", "Iniciado e aguardando fila")
+
     while True:
         job = fila.get()
         if job is None:
+            log(ip, "WORKER", "Encerrando worker")
             break
 
         caminho = job.get("caminho")
-        nome_exib = job.get("arquivo_label", os.path.basename(caminho))
+        label = job.get("arquivo_label", os.path.basename(caminho or ""))
 
-        # não volta progresso (evita 2% -> 1%)
-        PROGRESSO_UPLOAD[ip] = {"p": 0, "msg": f"[QUEUE] Iniciando: {nome_exib}"}
+        log(ip, "WORKER", f"Novo job: {label}")
+
+        PROGRESSO_UPLOAD[ip] = {"p": 0, "msg": f"[QUEUE] {label}"}
 
         try:
             tarefa_upload(ip, caminho)
         except Exception as e:
-            # se escapar algo, mostra o tipo + msg
-            PROGRESSO_UPLOAD[ip] = {"p": -1, "msg": f"[WORKER] {type(e).__name__}: {str(e)[:120]}"}
+            log(ip, "ERRO_WORKER", str(e))
+            PROGRESSO_UPLOAD[ip] = {"p": -1, "msg": "[WORKER] erro"}
         finally:
             fila.task_done()
+            log(ip, "WORKER", "Job finalizado")
+
 
 def enfileirar_impressao(ip, caminho_completo, arquivo_label=None):
     garantir_fila(ip)
 
-    # tamanho da fila (posição)
     pos = UPLOAD_FILAS[ip].qsize() + 1
     label = arquivo_label or os.path.basename(caminho_completo)
 
-    PROGRESSO_UPLOAD[ip] = {"p": 0, "msg": f"Na fila (pos {pos}): {label}"}
+    log(ip, "QUEUE", f"Adicionado na fila posição {pos}: {label}")
 
-    UPLOAD_FILAS[ip].put({
-        "caminho": caminho_completo,
-        "arquivo_label": label
-    })
+    PROGRESSO_UPLOAD[ip] = {"p": 0, "msg": f"[QUEUE] pos {pos}"}
 
-
+    UPLOAD_FILAS[ip].put({"caminho": caminho_completo, "arquivo_label": label})
 """Fila de impressão """
 
 def aguardar_estabilidade_arquivo(caminho, timeout=60):
@@ -742,124 +747,96 @@ def tarefa_upload(ip_alvo, caminho_completo):
 
     def set_prog(p, msg):
         PROGRESSO_UPLOAD[ip_alvo] = {"p": p, "msg": msg}
+        log(ip_alvo, "PROGRESS", f"{p}% | {msg}")
 
-    def extrair_lista_arquivos_moonraker(payload: dict):
-        """
-        Moonraker pode retornar:
-          A) {"result": [ ... ]}
-          B) {"result": {"files": [ ... ]}}
-        Normaliza e devolve lista.
-        """
-        result = payload.get("result", [])
-        if isinstance(result, list):
-            return result
-        if isinstance(result, dict):
-            files = result.get("files", [])
-            if isinstance(files, list):
-                return files
-        return []
-
-    # ✅ sessão LOCAL (evita briga com monitor threads)
     sess = requests.Session()
-    sess.headers.update({'Connection': 'keep-alive'})
 
     try:
-        # PASSO 1: aguardar arquivo “estável” no samba
-        set_prog(2, "[SYNC] Sincronizando arquivo no servidor...")
-        if not aguardar_estabilidade_arquivo(caminho_completo):
-            raise Exception("Arquivo incompleto no servidor (Samba)")
+        log(ip_alvo, "START", f"Iniciando envio: {nome_arquivo}")
+
+        # =========================
+        # 1) SYNC
+        # =========================
+        set_prog(2, "Sync arquivo")
+        ok = aguardar_estabilidade_arquivo(caminho_completo)
+
+        log(ip_alvo, "SYNC", f"Arquivo estável: {ok}")
+
+        if not ok:
+            raise Exception("Arquivo não estável")
 
         tamanho_local = os.path.getsize(caminho_completo)
+        log(ip_alvo, "SYNC", f"Tamanho local: {tamanho_local}")
 
-        # PASSO 2: upload (streaming) — protegido por semaphore global
+        # =========================
+        # 2) UPLOAD
+        # =========================
+        set_prog(5, "Iniciando upload")
+
         with UPLOAD_SEM:
-            set_prog(5, "[UPLOAD] Transmitindo para a impressora...")
+            log(ip_alvo, "UPLOAD", "Entrou no semaphore")
 
-            with open(caminho_completo, 'rb') as f:
+            with open(caminho_completo, "rb") as f:
                 monitor = Monitor(f, ip_alvo)
-                files = {'file': (nome_arquivo, monitor)}
+                files = {"file": (nome_arquivo, monitor)}
 
-                url_upload = f"http://{ip_alvo}/server/files/upload"
-                resp = sess.post(url_upload, files=files, timeout=1800)
+                url = f"http://{ip_alvo}/server/files/upload"
+                log(ip_alvo, "UPLOAD", f"POST -> {url}")
+
+                resp = sess.post(url, files=files, timeout=1800)
+
+                log(ip_alvo, "UPLOAD", f"Status: {resp.status_code}")
 
                 if resp.status_code >= 400:
-                    body = (resp.text or "")[:400]
-                    raise Exception(f"[UPLOAD] HTTP {resp.status_code}: {body}")
+                    raise Exception(f"Upload HTTP {resp.status_code}")
 
-        # PASSO 3: listar e validar integridade (com retry curto)
-        set_prog(95, "[LIST] Validando integridade (listando arquivos)...")
-        time.sleep(2.0)
+        # =========================
+        # 3) LIST
+        # =========================
+        set_prog(90, "Listando arquivos")
+        time.sleep(2)
 
         url_list = f"http://{ip_alvo}/server/files/list?root=gcodes"
+        log(ip_alvo, "LIST", f"GET -> {url_list}")
 
-        check = None
-        for tent in range(1, 4):  # 3 tentativas
-            check = sess.get(url_list, timeout=10)
-            if check.status_code == 200:
-                break
-            time.sleep(1.0)
+        r = sess.get(url_list, timeout=10)
+        log(ip_alvo, "LIST", f"Status: {r.status_code}")
 
-        if not check or check.status_code != 200:
-            # Não derruba de cara: só avisa e segue para start
-            set_prog(96, f"[LIST] Aviso: list falhou HTTP {check.status_code if check else 'sem resp'} — seguindo...")
+        if r.status_code != 200:
+            log(ip_alvo, "LIST", "Falhou mas continuando")
+
         else:
-            # Aqui é onde muita coisa “quebra” silenciosamente
-            try:
-                payload = check.json()
-            except Exception as je:
-                raise Exception(f"[LIST] JSON inválido: {type(je).__name__}: {str(je)[:120]}")
+            data = r.json()
+            arquivos = data.get("result", [])
 
-            arquivos = extrair_lista_arquivos_moonraker(payload)
+            log(ip_alvo, "LIST", f"Arquivos encontrados: {len(arquivos)}")
 
-            def bate(meta):
-                p = (meta.get('path') or '').replace("\\", "/")
-                # aceita arquivo na raiz, em subpastas e com prefixo gcodes/
-                return (
-                    p == nome_arquivo or
-                    p.endswith("/" + nome_arquivo) or
-                    p.endswith("gcodes/" + nome_arquivo)
-                )
+        # =========================
+        # 4) START PRINT
+        # =========================
+        set_prog(95, "Iniciando impressão")
 
-            meta = next((a for a in arquivos if isinstance(a, dict) and bate(a)), None)
-
-            # se tiver size, valida; se não tiver, segue
-            if meta and isinstance(meta.get('size'), int):
-                if meta['size'] != tamanho_local:
-                    raise Exception(f"[SIZE] Corte: {meta['size']} != {tamanho_local}")
-            else:
-                # não derruba
-                set_prog(96, "[LIST] Aviso: não consegui validar size — seguindo...")
-
-        # PASSO 4: start print (com retry)
-        set_prog(98, "[START] Iniciando impressão...")
         nome_url = urllib.parse.quote(nome_arquivo)
         url_start = f"http://{ip_alvo}/printer/print/start?filename={nome_url}"
 
-        resp_start = None
-        for tent in range(1, 4):
-            resp_start = sess.post(url_start, timeout=15)
-            # Alguns setups devolvem 200/204. Aceita <400.
-            if resp_start.status_code < 400:
-                break
-            time.sleep(1.0)
+        log(ip_alvo, "START_PRINT", f"POST -> {url_start}")
 
-        if not resp_start or resp_start.status_code >= 400:
-            body = (resp_start.text or "")[:300] if resp_start else ""
-            raise Exception(f"[START] HTTP {resp_start.status_code if resp_start else 'sem resp'}: {body}")
+        resp2 = sess.post(url_start, timeout=15)
 
-        set_prog(100, "[OK] Sucesso!")
+        log(ip_alvo, "START_PRINT", f"Status: {resp2.status_code}")
+
+        if resp2.status_code >= 400:
+            raise Exception("Erro ao iniciar impressão")
+
+        set_prog(100, "Finalizado com sucesso")
+        log(ip_alvo, "SUCESSO", "Arquivo enviado e impressão iniciada")
 
     except Exception as e:
-        # 👇 AGORA o front vai mostrar A ETAPA + erro real
-        print(f"🚨 Falha crítica em {ip_alvo}: {e}")
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": f"{str(e)[:140]}"}
+        log(ip_alvo, "ERRO_GERAL", str(e))
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": str(e)}
 
     finally:
-        try:
-            sess.close()
-        except:
-            pass
-
+        sess.close()
 
 @app.route('/progresso_transmissao/<ip>')
 def progresso_transmissao(ip):
