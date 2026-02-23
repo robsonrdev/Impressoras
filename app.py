@@ -643,13 +643,14 @@ def worker_upload(ip):
         caminho = job.get("caminho")
         nome_exib = job.get("arquivo_label", os.path.basename(caminho))
 
-        # ✅ Não "volta" progresso (evita 2% -> 1%)
-        PROGRESSO_UPLOAD[ip] = {"p": 0, "msg": f"Iniciando: {nome_exib}"}
+        # não volta progresso (evita 2% -> 1%)
+        PROGRESSO_UPLOAD[ip] = {"p": 0, "msg": f"[QUEUE] Iniciando: {nome_exib}"}
 
         try:
             tarefa_upload(ip, caminho)
         except Exception as e:
-            PROGRESSO_UPLOAD[ip] = {"p": -1, "msg": f"Erro: {str(e)[:60]}"}
+            # se escapar algo, mostra o tipo + msg
+            PROGRESSO_UPLOAD[ip] = {"p": -1, "msg": f"[WORKER] {type(e).__name__}: {str(e)[:120]}"}
         finally:
             fila.task_done()
 
@@ -739,86 +740,125 @@ def extrair_lista_arquivos_moonraker(json_data):
 def tarefa_upload(ip_alvo, caminho_completo):
     nome_arquivo = os.path.basename(caminho_completo)
 
-    def extrair_lista_arquivos_moonraker(payload: dict):
-        result = payload.get("result", [])
+    def set_prog(p, msg):
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": p, "msg": msg}
 
+    def extrair_lista_arquivos_moonraker(payload: dict):
+        """
+        Moonraker pode retornar:
+          A) {"result": [ ... ]}
+          B) {"result": {"files": [ ... ]}}
+        Normaliza e devolve lista.
+        """
+        result = payload.get("result", [])
         if isinstance(result, list):
             return result
-
         if isinstance(result, dict):
             files = result.get("files", [])
             if isinstance(files, list):
                 return files
-
         return []
 
+    # ✅ sessão LOCAL (evita briga com monitor threads)
+    sess = requests.Session()
+    sess.headers.update({'Connection': 'keep-alive'})
+
     try:
-        # 🛡️ PASSO 1: Sincronia de Disco (Anti-Corte)
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": 2, "msg": "Sincronizando..."}
+        # PASSO 1: aguardar arquivo “estável” no samba
+        set_prog(2, "[SYNC] Sincronizando arquivo no servidor...")
         if not aguardar_estabilidade_arquivo(caminho_completo):
             raise Exception("Arquivo incompleto no servidor (Samba)")
 
         tamanho_local = os.path.getsize(caminho_completo)
 
+        # PASSO 2: upload (streaming) — protegido por semaphore global
         with UPLOAD_SEM:
-            # 🚀 PASSO 2: Upload para o Moonraker
-            PROGRESSO_UPLOAD[ip_alvo] = {"p": 5, "msg": "Transmitindo..."}
+            set_prog(5, "[UPLOAD] Transmitindo para a impressora...")
 
             with open(caminho_completo, 'rb') as f:
                 monitor = Monitor(f, ip_alvo)
                 files = {'file': (nome_arquivo, monitor)}
 
                 url_upload = f"http://{ip_alvo}/server/files/upload"
-                resp = SESSAO_REDE.post(url_upload, files=files, timeout=1800)
+                resp = sess.post(url_upload, files=files, timeout=1800)
 
                 if resp.status_code >= 400:
-                    body = (resp.text or "")[:300]
-                    raise Exception(f"Falha upload HTTP {resp.status_code}: {body}")
+                    body = (resp.text or "")[:400]
+                    raise Exception(f"[UPLOAD] HTTP {resp.status_code}: {body}")
 
-        # 💾 PASSO 3: Validação de integridade (não confundir 200 com sucesso de parsing)
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": 95, "msg": "Validando integridade..."}
-        time.sleep(3.0)
+        # PASSO 3: listar e validar integridade (com retry curto)
+        set_prog(95, "[LIST] Validando integridade (listando arquivos)...")
+        time.sleep(2.0)
 
         url_list = f"http://{ip_alvo}/server/files/list?root=gcodes"
-        check = SESSAO_REDE.get(url_list, timeout=10)
 
-        if check.status_code == 200:
-            payload = check.json()
+        check = None
+        for tent in range(1, 4):  # 3 tentativas
+            check = sess.get(url_list, timeout=10)
+            if check.status_code == 200:
+                break
+            time.sleep(1.0)
+
+        if not check or check.status_code != 200:
+            # Não derruba de cara: só avisa e segue para start
+            set_prog(96, f"[LIST] Aviso: list falhou HTTP {check.status_code if check else 'sem resp'} — seguindo...")
+        else:
+            # Aqui é onde muita coisa “quebra” silenciosamente
+            try:
+                payload = check.json()
+            except Exception as je:
+                raise Exception(f"[LIST] JSON inválido: {type(je).__name__}: {str(je)[:120]}")
+
             arquivos = extrair_lista_arquivos_moonraker(payload)
 
             def bate(meta):
-                # meta deve ser dict
                 p = (meta.get('path') or '').replace("\\", "/")
-                return p == nome_arquivo or p.endswith("/" + nome_arquivo) or p.endswith("gcodes/" + nome_arquivo)
+                # aceita arquivo na raiz, em subpastas e com prefixo gcodes/
+                return (
+                    p == nome_arquivo or
+                    p.endswith("/" + nome_arquivo) or
+                    p.endswith("gcodes/" + nome_arquivo)
+                )
 
             meta = next((a for a in arquivos if isinstance(a, dict) and bate(a)), None)
 
+            # se tiver size, valida; se não tiver, segue
             if meta and isinstance(meta.get('size'), int):
                 if meta['size'] != tamanho_local:
-                    raise Exception(f"Corte detectado: {meta['size']} de {tamanho_local} bytes")
+                    raise Exception(f"[SIZE] Corte: {meta['size']} != {tamanho_local}")
             else:
-                # não derruba o fluxo, mas registra
-                print(f"⚠️ Aviso: '{nome_arquivo}' não localizado/sem size na listagem para validar.")
-        else:
-            print(f"⚠️ Aviso: não foi possível listar arquivos (HTTP {check.status_code}).")
+                # não derruba
+                set_prog(96, "[LIST] Aviso: não consegui validar size — seguindo...")
 
-        # ▶️ PASSO 4: Iniciar impressão
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": 98, "msg": "Iniciando..."}
+        # PASSO 4: start print (com retry)
+        set_prog(98, "[START] Iniciando impressão...")
         nome_url = urllib.parse.quote(nome_arquivo)
         url_start = f"http://{ip_alvo}/printer/print/start?filename={nome_url}"
 
-        resp_start = SESSAO_REDE.post(url_start, timeout=15)
+        resp_start = None
+        for tent in range(1, 4):
+            resp_start = sess.post(url_start, timeout=15)
+            # Alguns setups devolvem 200/204. Aceita <400.
+            if resp_start.status_code < 400:
+                break
+            time.sleep(1.0)
 
-        if resp_start.status_code >= 400:
-            body = (resp_start.text or "")[:200]
-            raise Exception(f"Falha ao iniciar impressão HTTP {resp_start.status_code}: {body}")
+        if not resp_start or resp_start.status_code >= 400:
+            body = (resp_start.text or "")[:300] if resp_start else ""
+            raise Exception(f"[START] HTTP {resp_start.status_code if resp_start else 'sem resp'}: {body}")
 
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": 100, "msg": "Sucesso!"}
+        set_prog(100, "[OK] Sucesso!")
 
     except Exception as e:
+        # 👇 AGORA o front vai mostrar A ETAPA + erro real
         print(f"🚨 Falha crítica em {ip_alvo}: {e}")
-        PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": f"Erro: {str(e)[:60]}"}
+        PROGRESSO_UPLOAD[ip_alvo] = {"p": -1, "msg": f"{str(e)[:140]}"}
 
+    finally:
+        try:
+            sess.close()
+        except:
+            pass
 
 
 @app.route('/progresso_transmissao/<ip>')
