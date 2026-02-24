@@ -843,6 +843,84 @@ def tarefa_upload(ip_alvo, caminho_completo):
 
     sess = requests.Session()
 
+    def moon_get(url, timeout=3.0):
+        return sess.get(url, timeout=timeout)
+
+    def moon_post(url, timeout=5.0, **kwargs):
+        return sess.post(url, timeout=timeout, **kwargs)
+
+    def buscar_path_no_moonraker(nome):
+        """
+        Retorna o 'path' (ou nome) do arquivo dentro do root=gcodes.
+        Ex: 'Teste.gcode' ou 'subpasta/Teste.gcode'
+        """
+        url_list = f"http://{ip_alvo}/server/files/list?root=gcodes"
+        log(ip_alvo, "LIST", f"GET {url_list}")
+        r = moon_get(url_list, timeout=10)
+
+        log(ip_alvo, "LIST", f"status={r.status_code}")
+        if r.status_code != 200:
+            log(ip_alvo, "LIST", f"falhou | body={(r.text or '')[:200]}")
+            return None
+
+        data = r.json()
+        arquivos = extrair_lista_arquivos_moonraker(data)
+
+        # tenta achar pelo nome (case-sensitive primeiro)
+        for a in arquivos:
+            if not isinstance(a, dict):
+                continue
+            if a.get("filename") == nome:
+                return a.get("path") or a.get("filename") or nome
+
+        # fallback: case-insensitive
+        nome_low = (nome or "").lower()
+        for a in arquivos:
+            if not isinstance(a, dict):
+                continue
+            fn = (a.get("filename") or "")
+            if fn.lower() == nome_low:
+                return a.get("path") or a.get("filename") or fn
+
+        # não achou
+        log(ip_alvo, "LIST", f"Arquivo '{nome}' não encontrado na lista do Moonraker")
+        return None
+
+    def tentar_start_print(filename_path):
+        """
+        Tenta iniciar impressão em 2 formatos:
+        1) querystring (o seu atual)
+        2) JSON body (algumas builds preferem)
+        """
+        # 1) formato querystring
+        nome_url = urllib.parse.quote(filename_path)
+        url_start_qs = f"http://{ip_alvo}/printer/print/start?filename={nome_url}"
+        log(ip_alvo, "START_PRINT", f"POST {url_start_qs}")
+
+        try:
+            r1 = moon_post(url_start_qs, timeout=(3.0, 8.0))
+            log(ip_alvo, "START_PRINT", f"qs status={r1.status_code} | body={(r1.text or '')[:200]}")
+            if r1.status_code < 400:
+                return True
+        except requests.exceptions.ReadTimeout:
+            log(ip_alvo, "START_PRINT", "qs ReadTimeout (pode ter iniciado mesmo assim)")
+            # não retorna ainda — vamos validar por status
+
+        # 2) formato JSON body
+        url_start_json = f"http://{ip_alvo}/printer/print/start"
+        payload = {"filename": filename_path}
+        log(ip_alvo, "START_PRINT", f"POST {url_start_json} json={payload}")
+
+        try:
+            r2 = moon_post(url_start_json, json=payload, timeout=(3.0, 8.0))
+            log(ip_alvo, "START_PRINT", f"json status={r2.status_code} | body={(r2.text or '')[:200]}")
+            if r2.status_code < 400:
+                return True
+        except requests.exceptions.ReadTimeout:
+            log(ip_alvo, "START_PRINT", "json ReadTimeout (pode ter iniciado mesmo assim)")
+
+        return False
+
     try:
         set_busy(ip_alvo, True)
         log(ip_alvo, "START", f"Iniciando envio: {nome_arquivo}")
@@ -857,7 +935,7 @@ def tarefa_upload(ip_alvo, caminho_completo):
         tamanho_local = os.path.getsize(caminho_completo)
         log(ip_alvo, "SYNC", f"size_local={tamanho_local}")
 
-        # 2) UPLOAD (com fila global)
+        # 2) UPLOAD
         with UPLOAD_SEM:
             set_prog(5, "Transmitindo para a impressora")
             log(ip_alvo, "UPLOAD", "Entrou no semaphore")
@@ -869,7 +947,6 @@ def tarefa_upload(ip_alvo, caminho_completo):
                 url_upload = f"http://{ip_alvo}/server/files/upload"
                 log(ip_alvo, "UPLOAD", f"POST {url_upload}")
 
-                # timeout tupla: (connect, read)
                 resp = sess.post(url_upload, files=files, timeout=(5.0, 1800))
                 log(ip_alvo, "UPLOAD", f"status={resp.status_code}")
 
@@ -879,67 +956,43 @@ def tarefa_upload(ip_alvo, caminho_completo):
 
                 log(ip_alvo, "UPLOAD_OK", f"Upload finalizado | status={resp.status_code} | size_local={tamanho_local}")
 
-        # 3) LISTAR (opcional, só para log/diagnóstico)
+        # 3) LISTAR + descobrir PATH real
         set_prog(90, "Listando arquivos no Moonraker")
-        time.sleep(2)
+        time.sleep(1.5)
 
-        url_list = f"http://{ip_alvo}/server/files/list?root=gcodes"
-        log(ip_alvo, "LIST", f"GET {url_list}")
+        filename_path = buscar_path_no_moonraker(nome_arquivo)
+        # Se não achou path, tenta pelo nome mesmo (último recurso)
+        if not filename_path:
+            filename_path = nome_arquivo
 
-        try:
-            r = sess.get(url_list, timeout=10)
-            log(ip_alvo, "LIST", f"status={r.status_code}")
-            if r.status_code == 200:
-                data = r.json()
-                arquivos = data.get("result", [])
-                # cuidado: algumas versões retornam dict. Aqui é só log mesmo.
-                try:
-                    qtd = len(arquivos)
-                except Exception:
-                    qtd = -1
-                log(ip_alvo, "LIST", f"qtd={qtd}")
-            else:
-                log(ip_alvo, "LIST", f"falhou | body={(r.text or '')[:200]}")
-        except Exception as e:
-            log(ip_alvo, "LIST_FAIL", str(e))
+        log(ip_alvo, "LIST", f"Usando filename_path='{filename_path}'")
 
-        # 4) START PRINT
+        # 4) START PRINT (robusto)
         set_prog(95, "Iniciando impressão (start)")
-        nome_url = urllib.parse.quote(nome_arquivo)
-        url_start = f"http://{ip_alvo}/printer/print/start?filename={nome_url}"
-        log(ip_alvo, "START_PRINT", f"POST {url_start}")
+        _ = tentar_start_print(filename_path)
 
-        try:
-            resp2 = sess.post(url_start, timeout=(3.0, 8.0))
-            log(ip_alvo, "START_PRINT", f"status={resp2.status_code}")
-
-            if resp2.status_code >= 400:
-                body = (resp2.text or "")[:200]
-                raise Exception(f"Falha ao iniciar impressão HTTP {resp2.status_code}: {body}")
-
-        except requests.exceptions.ReadTimeout:
-            # Moonraker pode iniciar mas não responder a tempo
-            log(ip_alvo, "START_PRINT", "ReadTimeout no retorno. Vou validar por status...")
-
-        # 5) VALIDAR SE ENTROU EM PRINTING
+        # 5) VALIDAR SE ENTROU EM PRINTING (mais tolerante)
         set_prog(98, "Validando se entrou em impressão")
-        ok_printing = False
 
         url_state = f"http://{ip_alvo}/printer/objects/query?print_stats"
         inicio = time.time()
-
+        ok_printing = False
         ultimo_state = None
-        while time.time() - inicio < 25:
+
+        estados_ok = {"printing", "paused", "startup", "busy"}  # <- tolerância aqui
+
+        while time.time() - inicio < 45:  # aumentei pra 45s
             try:
-                st = sess.get(url_state, timeout=3.0)
+                st = moon_get(url_state, timeout=3.0)
                 if st.status_code == 200:
                     dados = st.json().get("result", {}).get("status", {})
                     state = (dados.get("print_stats") or {}).get("state")
+
                     if state != ultimo_state:
                         log(ip_alvo, "VALIDATE", f"state={state}")
                         ultimo_state = state
 
-                    if state in ("printing", "paused"):
+                    if state in estados_ok:
                         ok_printing = True
                         break
                 else:
@@ -951,10 +1004,22 @@ def tarefa_upload(ip_alvo, caminho_completo):
             time.sleep(2)
 
         if not ok_printing:
-            raise Exception("Start enviado, mas não confirmou 'printing' em 25s")
+            # Log extra: tenta puxar console pra ver motivo (muitas vezes aparece lá)
+            try:
+                url_console = f"http://{ip_alvo}/server/gcode_store"
+                c = moon_get(url_console, timeout=3.0)
+                if c.status_code == 200:
+                    logs_brutos = c.json().get("result", {}).get("gcode_store", [])
+                    if isinstance(logs_brutos, list) and logs_brutos:
+                        ult = logs_brutos[-5:]
+                        log(ip_alvo, "CONSOLE", f"ultimos={ult}")
+            except Exception as e:
+                log(ip_alvo, "CONSOLE_FAIL", str(e))
+
+            raise Exception("Start enviado, mas não confirmou estado de impressão em 45s")
 
         set_prog(100, "Sucesso!")
-        log(ip_alvo, "SUCESSO", "Arquivo enviado e impressão iniciada")
+        log(ip_alvo, "SUCESSO", f"Arquivo enviado e impressão iniciada ({filename_path})")
 
     except Exception as e:
         log(ip_alvo, "ERRO_GERAL", str(e))
