@@ -216,7 +216,6 @@ def salvar_maquina(ip, nome):
         print(f"🚨 Falha ao salvar no SQLite: {e}")
         return False
 # --- Fim Funcao Salvar Maquina ---
-
 class Monitor:
     def __init__(self, file, ip_alvo):
         self.file = file
@@ -231,8 +230,12 @@ class Monitor:
 
     def read(self, size=-1):
         try:
-            if size is None or size < 256 * 1024:
+            # ✅ respeita o tamanho pedido pelo requests
+            if size is None or size < 0:
                 size = 256 * 1024
+            else:
+                # limita para não travar
+                size = min(size, 256 * 1024)
 
             data = self.file.read(size)
             n = len(data)
@@ -251,7 +254,6 @@ class Monitor:
                         msg = "[UPLOAD] Finalizando..."
 
                     PROGRESSO_UPLOAD[self.ip_alvo] = {"p": percent, "msg": msg}
-
                     log(self.ip_alvo, "UPLOAD", f"{percent}% ({self.bytes_read}/{self.total})")
 
             return data
@@ -262,8 +264,7 @@ class Monitor:
             raise
 
     def __getattr__(self, attr):
-        return getattr(self.file, attr)
-    
+        return getattr(self.file, attr)    
 
 # --- FUNÇÕES DE REDE E MONITORAMENTO ---
 def testar_conexao_rapida(ip, porta=80):
@@ -832,8 +833,15 @@ def extrair_lista_arquivos_moonraker(json_data):
     return []
 
 
-
 def tarefa_upload(ip_alvo, caminho_completo):
+    """
+    Versão ROBUSTA baseada na SUA função, com:
+    ✅ validação de arquivo truncado (size remoto x local)
+    ✅ retry automático (2 tentativas) se truncar / SD busy / start não confirmar
+    ✅ delete automático do arquivo truncado antes de reenviar
+    ✅ start em 2 formatos (querystring e JSON)
+    ✅ validação tolerante (printing/paused/startup/busy) + log do console no erro
+    """
     nome_arquivo = os.path.basename(caminho_completo)
     log(ip_alvo, "JOB", f"JOB recebido | caminho={caminho_completo} | arquivo={nome_arquivo}")
 
@@ -849,139 +857,127 @@ def tarefa_upload(ip_alvo, caminho_completo):
     def moon_post(url, timeout=5.0, **kwargs):
         return sess.post(url, timeout=timeout, **kwargs)
 
-    def buscar_path_no_moonraker(nome):
-        """
-        Retorna o 'path' (ou nome) do arquivo dentro do root=gcodes.
-        Ex: 'Teste.gcode' ou 'subpasta/Teste.gcode'
-        """
+    def extrair_status(resp):
+        try:
+            return resp.status_code, (resp.text or "")[:200]
+        except Exception:
+            return -1, ""
+
+    def listar_arquivos():
         url_list = f"http://{ip_alvo}/server/files/list?root=gcodes"
         log(ip_alvo, "LIST", f"GET {url_list}")
         r = moon_get(url_list, timeout=10)
-
         log(ip_alvo, "LIST", f"status={r.status_code}")
         if r.status_code != 200:
             log(ip_alvo, "LIST", f"falhou | body={(r.text or '')[:200]}")
-            return None
-
+            return None, []
         data = r.json()
         arquivos = extrair_lista_arquivos_moonraker(data)
+        return r, arquivos
 
-        # tenta achar pelo nome (case-sensitive primeiro)
+    def buscar_arquivo_no_moonraker(nome):
+        """
+        Retorna tupla (filename_path, size_remoto) do arquivo dentro do root=gcodes.
+        filename_path pode ser: 'Teste.gcode' ou 'subpasta/Teste.gcode'
+        """
+        _, arquivos = listar_arquivos()
+        if not arquivos:
+            return None, 0
+
+        # case-sensitive primeiro
         for a in arquivos:
             if not isinstance(a, dict):
                 continue
             if a.get("filename") == nome:
-                return a.get("path") or a.get("filename") or nome
+                path = a.get("path") or a.get("filename") or nome
+                size = int(a.get("size") or 0)
+                return path, size
 
-        # fallback: case-insensitive
+        # fallback case-insensitive
         nome_low = (nome or "").lower()
         for a in arquivos:
             if not isinstance(a, dict):
                 continue
             fn = (a.get("filename") or "")
             if fn.lower() == nome_low:
-                return a.get("path") or a.get("filename") or fn
+                path = a.get("path") or a.get("filename") or fn
+                size = int(a.get("size") or 0)
+                return path, size
 
-        # não achou
         log(ip_alvo, "LIST", f"Arquivo '{nome}' não encontrado na lista do Moonraker")
-        return None
+        return None, 0
+
+    def deletar_arquivo_remoto(filename_path):
+        """
+        Remove arquivo da impressora (quando truncou/bugou).
+        Moonraker aceita /server/files/delete?path=<path>
+        """
+        if not filename_path:
+            return False
+
+        path_url = urllib.parse.quote(filename_path)
+        url_del = f"http://{ip_alvo}/server/files/delete?path={path_url}"
+        log(ip_alvo, "DELETE", f"POST {url_del}")
+
+        try:
+            r = moon_post(url_del, timeout=10)
+            log(ip_alvo, "DELETE", f"status={r.status_code} | body={(r.text or '')[:200]}")
+            return r.status_code < 400
+        except Exception as e:
+            log(ip_alvo, "DELETE_FAIL", str(e))
+            return False
 
     def tentar_start_print(filename_path):
         """
         Tenta iniciar impressão em 2 formatos:
-        1) querystring (o seu atual)
-        2) JSON body (algumas builds preferem)
+        1) querystring
+        2) JSON body
         """
-        # 1) formato querystring
+        # 1) querystring
         nome_url = urllib.parse.quote(filename_path)
         url_start_qs = f"http://{ip_alvo}/printer/print/start?filename={nome_url}"
         log(ip_alvo, "START_PRINT", f"POST {url_start_qs}")
 
         try:
-            r1 = moon_post(url_start_qs, timeout=(3.0, 8.0))
+            r1 = moon_post(url_start_qs, timeout=(3.0, 12.0))
             log(ip_alvo, "START_PRINT", f"qs status={r1.status_code} | body={(r1.text or '')[:200]}")
             if r1.status_code < 400:
                 return True
         except requests.exceptions.ReadTimeout:
             log(ip_alvo, "START_PRINT", "qs ReadTimeout (pode ter iniciado mesmo assim)")
-            # não retorna ainda — vamos validar por status
+        except Exception as e:
+            log(ip_alvo, "START_PRINT", f"qs erro={e}")
 
-        # 2) formato JSON body
+        # 2) JSON body
         url_start_json = f"http://{ip_alvo}/printer/print/start"
         payload = {"filename": filename_path}
         log(ip_alvo, "START_PRINT", f"POST {url_start_json} json={payload}")
 
         try:
-            r2 = moon_post(url_start_json, json=payload, timeout=(3.0, 8.0))
+            r2 = moon_post(url_start_json, json=payload, timeout=(3.0, 12.0))
             log(ip_alvo, "START_PRINT", f"json status={r2.status_code} | body={(r2.text or '')[:200]}")
             if r2.status_code < 400:
                 return True
         except requests.exceptions.ReadTimeout:
             log(ip_alvo, "START_PRINT", "json ReadTimeout (pode ter iniciado mesmo assim)")
+        except Exception as e:
+            log(ip_alvo, "START_PRINT", f"json erro={e}")
 
         return False
 
-    try:
-        set_busy(ip_alvo, True)
-        log(ip_alvo, "START", f"Iniciando envio: {nome_arquivo}")
-
-        # 1) SYNC (Samba)
-        set_prog(2, "Sincronizando arquivo (Samba)")
-        ok = aguardar_estabilidade_arquivo(caminho_completo)
-        log(ip_alvo, "SYNC", f"estavel={ok}")
-        if not ok:
-            raise Exception("Arquivo incompleto no servidor (Samba)")
-
-        tamanho_local = os.path.getsize(caminho_completo)
-        log(ip_alvo, "SYNC", f"size_local={tamanho_local}")
-
-        # 2) UPLOAD
-        with UPLOAD_SEM:
-            set_prog(5, "Transmitindo para a impressora")
-            log(ip_alvo, "UPLOAD", "Entrou no semaphore")
-
-            with open(caminho_completo, "rb") as f:
-                monitor = Monitor(f, ip_alvo)
-                files = {"file": (nome_arquivo, monitor)}
-
-                url_upload = f"http://{ip_alvo}/server/files/upload"
-                log(ip_alvo, "UPLOAD", f"POST {url_upload}")
-
-                resp = sess.post(url_upload, files=files, timeout=(5.0, 1800))
-                log(ip_alvo, "UPLOAD", f"status={resp.status_code}")
-
-                if resp.status_code >= 400:
-                    body = (resp.text or "")[:300]
-                    raise Exception(f"Falha upload HTTP {resp.status_code}: {body}")
-
-                log(ip_alvo, "UPLOAD_OK", f"Upload finalizado | status={resp.status_code} | size_local={tamanho_local}")
-
-        # 3) LISTAR + descobrir PATH real
-        set_prog(90, "Listando arquivos no Moonraker")
-        time.sleep(1.5)
-
-        filename_path = buscar_path_no_moonraker(nome_arquivo)
-        # Se não achou path, tenta pelo nome mesmo (último recurso)
-        if not filename_path:
-            filename_path = nome_arquivo
-
-        log(ip_alvo, "LIST", f"Usando filename_path='{filename_path}'")
-
-        # 4) START PRINT (robusto)
-        set_prog(95, "Iniciando impressão (start)")
-        _ = tentar_start_print(filename_path)
-
-        # 5) VALIDAR SE ENTROU EM PRINTING (mais tolerante)
-        set_prog(98, "Validando se entrou em impressão")
-
+    def validar_estado_printing(timeout_total=60):
+        """
+        Valida se entrou em impressão. Tolerante a estados intermediários.
+        Retorna True se ok.
+        """
         url_state = f"http://{ip_alvo}/printer/objects/query?print_stats"
         inicio = time.time()
-        ok_printing = False
         ultimo_state = None
 
-        estados_ok = {"printing", "paused", "startup", "busy"}  # <- tolerância aqui
+        # tolerância: algumas N4 ficam em "startup/busy" antes de virar "printing"
+        estados_ok = {"printing", "paused", "startup", "busy"}
 
-        while time.time() - inicio < 45:  # aumentei pra 45s
+        while time.time() - inicio < timeout_total:
             try:
                 st = moon_get(url_state, timeout=3.0)
                 if st.status_code == 200:
@@ -993,33 +989,126 @@ def tarefa_upload(ip_alvo, caminho_completo):
                         ultimo_state = state
 
                     if state in estados_ok:
-                        ok_printing = True
-                        break
+                        return True
+
                 else:
                     log(ip_alvo, "VALIDATE_BAD", f"HTTP {st.status_code} | body={(st.text or '')[:200]}")
-
             except Exception as e:
                 log(ip_alvo, "VALIDATE_FAIL", str(e))
 
             time.sleep(2)
 
-        if not ok_printing:
-            # Log extra: tenta puxar console pra ver motivo (muitas vezes aparece lá)
+        return False
+
+    def log_ultimos_console():
+        try:
+            url_console = f"http://{ip_alvo}/server/gcode_store"
+            c = moon_get(url_console, timeout=3.0)
+            if c.status_code == 200:
+                logs_brutos = c.json().get("result", {}).get("gcode_store", [])
+                if isinstance(logs_brutos, list) and logs_brutos:
+                    ult = logs_brutos[-8:]
+                    log(ip_alvo, "CONSOLE", f"ultimos={ult}")
+        except Exception as e:
+            log(ip_alvo, "CONSOLE_FAIL", str(e))
+
+    # ---------------------------------------------------------
+    # RETRY LOOP (2 tentativas extras além da primeira = total 3)
+    # ---------------------------------------------------------
+    try:
+        set_busy(ip_alvo, True)
+        log(ip_alvo, "START", f"Iniciando envio: {nome_arquivo}")
+
+        # 1) SYNC (Samba) - fora do retry (não muda entre tentativas)
+        set_prog(2, "Sincronizando arquivo (Samba)")
+        ok = aguardar_estabilidade_arquivo(caminho_completo)
+        log(ip_alvo, "SYNC", f"estavel={ok}")
+        if not ok:
+            raise Exception("Arquivo incompleto no servidor (Samba)")
+
+        tamanho_local = os.path.getsize(caminho_completo)
+        log(ip_alvo, "SYNC", f"size_local={tamanho_local}")
+
+        ultima_ex = None
+
+        for tentativa in range(1, 4):  # 1..3
             try:
-                url_console = f"http://{ip_alvo}/server/gcode_store"
-                c = moon_get(url_console, timeout=3.0)
-                if c.status_code == 200:
-                    logs_brutos = c.json().get("result", {}).get("gcode_store", [])
-                    if isinstance(logs_brutos, list) and logs_brutos:
-                        ult = logs_brutos[-5:]
-                        log(ip_alvo, "CONSOLE", f"ultimos={ult}")
+                log(ip_alvo, "TRY", f"Tentativa {tentativa}/3")
+
+                # 2) UPLOAD (com semáforo global)
+                with UPLOAD_SEM:
+                    set_prog(5, f"Transmitindo para a impressora (tentativa {tentativa}/3)")
+                    log(ip_alvo, "UPLOAD", "Entrou no semaphore")
+
+                    with open(caminho_completo, "rb") as f:
+                        monitor = Monitor(f, ip_alvo)
+                        files = {"file": (nome_arquivo, monitor)}
+
+                        url_upload = f"http://{ip_alvo}/server/files/upload"
+                        log(ip_alvo, "UPLOAD", f"POST {url_upload}")
+
+                        resp = sess.post(url_upload, files=files, timeout=(8.0, 1800))
+                        log(ip_alvo, "UPLOAD", f"status={resp.status_code}")
+
+                        if resp.status_code >= 400:
+                            body = (resp.text or "")[:300]
+                            raise Exception(f"Falha upload HTTP {resp.status_code}: {body}")
+
+                        log(ip_alvo, "UPLOAD_OK",
+                            f"Upload finalizado | status={resp.status_code} | size_local={tamanho_local}")
+
+                # 3) LISTAR + descobrir PATH real + VALIDAR SIZE
+                set_prog(85, "Validando arquivo na impressora (size remoto)")
+                time.sleep(1.5)
+
+                filename_path, size_remoto = buscar_arquivo_no_moonraker(nome_arquivo)
+                if not filename_path:
+                    filename_path = nome_arquivo  # último recurso
+
+                log(ip_alvo, "LIST", f"Usando filename_path='{filename_path}' | remoto={size_remoto} | local={tamanho_local}")
+
+                # ✅ Se size_remoto veio 0, pode ser que a lista não tenha "size".
+                # Então, se 0, não trava aqui — mas se vier !=0 e não bater, é truncado.
+                if size_remoto and size_remoto != tamanho_local:
+                    log(ip_alvo, "TRUNCADO", f"Arquivo truncado! remoto={size_remoto} local={tamanho_local}")
+                    # tenta deletar e retry
+                    deletar_arquivo_remoto(filename_path)
+                    raise Exception(f"Arquivo TRUNCADO na impressora (remoto={size_remoto} local={tamanho_local})")
+
+                # 4) START PRINT (robusto)
+                set_prog(95, "Iniciando impressão (start)")
+                tentar_start_print(filename_path)
+
+                # 5) VALIDAR ESTADO (mais tempo)
+                set_prog(98, "Validando se entrou em impressão")
+                ok_printing = validar_estado_printing(timeout_total=60)
+
+                if not ok_printing:
+                    log_ultimos_console()
+                    raise Exception("Start enviado, mas não confirmou estado de impressão em 60s")
+
+                # ✅ sucesso
+                set_prog(100, "Sucesso!")
+                log(ip_alvo, "SUCESSO", f"Arquivo enviado e impressão iniciada ({filename_path})")
+                return  # encerra função
+
             except Exception as e:
-                log(ip_alvo, "CONSOLE_FAIL", str(e))
+                ultima_ex = e
+                log(ip_alvo, "TRY_FAIL", str(e))
 
-            raise Exception("Start enviado, mas não confirmou estado de impressão em 45s")
+                # Pequena pausa antes de tentar de novo (evita SD busy)
+                time.sleep(3)
 
-        set_prog(100, "Sucesso!")
-        log(ip_alvo, "SUCESSO", f"Arquivo enviado e impressão iniciada ({filename_path})")
+                # Antes de retry, tenta achar e deletar arquivo remoto (caso tenha entrado parcial)
+                try:
+                    fp, _sz = buscar_arquivo_no_moonraker(nome_arquivo)
+                    if fp:
+                        deletar_arquivo_remoto(fp)
+                except Exception:
+                    pass
+
+        # se chegou aqui, falhou todas tentativas
+        raise ultima_ex or Exception("Falha desconhecida no upload/start")
 
     except Exception as e:
         log(ip_alvo, "ERRO_GERAL", str(e))
@@ -1031,6 +1120,7 @@ def tarefa_upload(ip_alvo, caminho_completo):
             sess.close()
         except Exception:
             pass
+        
 
 @app.route('/progresso_transmissao/<ip>')
 def progresso_transmissao(ip):
