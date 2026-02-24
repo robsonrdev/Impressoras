@@ -931,8 +931,6 @@ def tarefa_upload(ip_alvo, caminho_completo):
         while time.time() - inicio < 25:
             try:
                 st = sess.get(url_state, timeout=3.0)
-                if st.status_code != 200:
-                    log(ip_alvo, "VALIDATE_BAD", f"HTTP {st.status_code} | body={(st.text or '')[:200]}")
                 if st.status_code == 200:
                     dados = st.json().get("result", {}).get("status", {})
                     state = dados.get("print_stats", {}).get("state")
