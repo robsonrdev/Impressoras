@@ -847,18 +847,17 @@ def tarefa_upload(ip_alvo, caminho_completo):
         set_busy(ip_alvo, True)
         log(ip_alvo, "START", f"Iniciando envio: {nome_arquivo}")
 
-        # 1) SYNC
+        # 1) SYNC (Samba)
         set_prog(2, "Sincronizando arquivo (Samba)")
         ok = aguardar_estabilidade_arquivo(caminho_completo)
         log(ip_alvo, "SYNC", f"estavel={ok}")
-
         if not ok:
             raise Exception("Arquivo incompleto no servidor (Samba)")
 
         tamanho_local = os.path.getsize(caminho_completo)
         log(ip_alvo, "SYNC", f"size_local={tamanho_local}")
 
-        # 2) UPLOAD
+        # 2) UPLOAD (com fila global)
         with UPLOAD_SEM:
             set_prog(5, "Transmitindo para a impressora")
             log(ip_alvo, "UPLOAD", "Entrou no semaphore")
@@ -870,44 +869,47 @@ def tarefa_upload(ip_alvo, caminho_completo):
                 url_upload = f"http://{ip_alvo}/server/files/upload"
                 log(ip_alvo, "UPLOAD", f"POST {url_upload}")
 
+                # timeout tupla: (connect, read)
                 resp = sess.post(url_upload, files=files, timeout=(5.0, 1800))
                 log(ip_alvo, "UPLOAD", f"status={resp.status_code}")
-                log(ip_alvo, "UPLOAD_OK", f"Upload finalizado | status={resp.status_code} | size_local={tamanho_local}")
-                if st.status_code != 200:
-                    log(ip_alvo, "VALIDATE_BAD", f"HTTP {st.status_code} | body={(st.text or '')[:200]}")
 
                 if resp.status_code >= 400:
-                    log(ip_alvo, "UPLOAD_OK", f"Upload finalizado | status={resp.status_code} | size_local={tamanho_local}")
                     body = (resp.text or "")[:300]
                     raise Exception(f"Falha upload HTTP {resp.status_code}: {body}")
 
-        # 3) LIST
+                log(ip_alvo, "UPLOAD_OK", f"Upload finalizado | status={resp.status_code} | size_local={tamanho_local}")
+
+        # 3) LISTAR (opcional, só para log/diagnóstico)
         set_prog(90, "Listando arquivos no Moonraker")
         time.sleep(2)
 
         url_list = f"http://{ip_alvo}/server/files/list?root=gcodes"
         log(ip_alvo, "LIST", f"GET {url_list}")
 
-        r = sess.get(url_list, timeout=10)
-        log(ip_alvo, "LIST", f"status={r.status_code}")
+        try:
+            r = sess.get(url_list, timeout=10)
+            log(ip_alvo, "LIST", f"status={r.status_code}")
+            if r.status_code == 200:
+                data = r.json()
+                arquivos = data.get("result", [])
+                # cuidado: algumas versões retornam dict. Aqui é só log mesmo.
+                try:
+                    qtd = len(arquivos)
+                except Exception:
+                    qtd = -1
+                log(ip_alvo, "LIST", f"qtd={qtd}")
+            else:
+                log(ip_alvo, "LIST", f"falhou | body={(r.text or '')[:200]}")
+        except Exception as e:
+            log(ip_alvo, "LIST_FAIL", str(e))
 
-        if r.status_code == 200:
-            data = r.json()
-            arquivos = data.get("result", [])
-            log(ip_alvo, "LIST", f"qtd={len(arquivos)}")
-        else:
-            log(ip_alvo, "LIST", "falhou, seguindo mesmo assim")
-
-        # 4) START PRINT (onde você está caindo)
+        # 4) START PRINT
         set_prog(95, "Iniciando impressão (start)")
-
         nome_url = urllib.parse.quote(nome_arquivo)
-        log(ip_alvo, "JOB", f"JOB recebido | caminho={caminho_completo} | arquivo={nome_arquivo}")
         url_start = f"http://{ip_alvo}/printer/print/start?filename={nome_url}"
         log(ip_alvo, "START_PRINT", f"POST {url_start}")
 
         try:
-            # ✅ timeout em tupla: (connect, read)
             resp2 = sess.post(url_start, timeout=(3.0, 8.0))
             log(ip_alvo, "START_PRINT", f"status={resp2.status_code}")
 
@@ -916,9 +918,7 @@ def tarefa_upload(ip_alvo, caminho_completo):
                 raise Exception(f"Falha ao iniciar impressão HTTP {resp2.status_code}: {body}")
 
         except requests.exceptions.ReadTimeout:
-            # ✅ ESSENCIAL:
-            # Moonraker pode iniciar a impressão mas não responder a tempo.
-            # Então a gente NÃO derruba. A gente verifica o estado depois.
+            # Moonraker pode iniciar mas não responder a tempo
             log(ip_alvo, "START_PRINT", "ReadTimeout no retorno. Vou validar por status...")
 
         # 5) VALIDAR SE ENTROU EM PRINTING
@@ -928,19 +928,25 @@ def tarefa_upload(ip_alvo, caminho_completo):
         url_state = f"http://{ip_alvo}/printer/objects/query?print_stats"
         inicio = time.time()
 
+        ultimo_state = None
         while time.time() - inicio < 25:
             try:
                 st = sess.get(url_state, timeout=3.0)
                 if st.status_code == 200:
                     dados = st.json().get("result", {}).get("status", {})
-                    state = dados.get("print_stats", {}).get("state")
-                    log(ip_alvo, "VALIDATE", f"state={state}")
+                    state = (dados.get("print_stats") or {}).get("state")
+                    if state != ultimo_state:
+                        log(ip_alvo, "VALIDATE", f"state={state}")
+                        ultimo_state = state
 
                     if state in ("printing", "paused"):
                         ok_printing = True
                         break
+                else:
+                    log(ip_alvo, "VALIDATE_BAD", f"HTTP {st.status_code} | body={(st.text or '')[:200]}")
+
             except Exception as e:
-                log(ip_alvo, "VALIDATE", f"erro={e}")
+                log(ip_alvo, "VALIDATE_FAIL", str(e))
 
             time.sleep(2)
 
@@ -956,7 +962,10 @@ def tarefa_upload(ip_alvo, caminho_completo):
 
     finally:
         set_busy(ip_alvo, False)
-        sess.close()
+        try:
+            sess.close()
+        except Exception:
+            pass
 
 @app.route('/progresso_transmissao/<ip>')
 def progresso_transmissao(ip):
