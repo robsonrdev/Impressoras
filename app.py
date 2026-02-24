@@ -222,7 +222,6 @@ class Monitor:
         self.total = os.path.getsize(file.name)
         self.bytes_read = 0
         self.ip_alvo = ip_alvo
-
         self._last_update = 0.0
         self._min_interval = 0.3
 
@@ -230,19 +229,18 @@ class Monitor:
 
     def read(self, size=-1):
         try:
-            # ✅ respeita o tamanho pedido pelo requests
+            # ✅ Se o requests pedir "tudo" (size=-1/None), NÃO limite.
             if size is None or size < 0:
-                size = 256 * 1024
+                data = self.file.read()  # lê o restante inteiro
             else:
-                # limita para não travar
+                # ✅ Se pedir em chunks, você pode limitar para performance
                 size = min(size, 256 * 1024)
+                data = self.file.read(size)
 
-            data = self.file.read(size)
             n = len(data)
             self.bytes_read += n
 
             now = time.time()
-
             if self.total > 0:
                 percent = int((self.bytes_read / self.total) * 100)
 
@@ -264,7 +262,7 @@ class Monitor:
             raise
 
     def __getattr__(self, attr):
-        return getattr(self.file, attr)    
+        return getattr(self.file, attr)
 
 # --- FUNÇÕES DE REDE E MONITORAMENTO ---
 def testar_conexao_rapida(ip, porta=80):
@@ -1120,7 +1118,7 @@ def tarefa_upload(ip_alvo, caminho_completo):
             sess.close()
         except Exception:
             pass
-        
+
 
 @app.route('/progresso_transmissao/<ip>')
 def progresso_transmissao(ip):
