@@ -1055,6 +1055,8 @@ def tarefa_upload(ip_alvo, caminho_completo):
                         log(ip_alvo, "UPLOAD_OK",
                             f"Upload finalizado | status={resp.status_code} | size_local={tamanho_local}")
 
+                        log(ip_alvo, "UPLOAD_BODY", (resp.text or "")[:500])
+
                 # 3) LISTAR + descobrir PATH real + VALIDAR SIZE
                 set_prog(85, "Validando arquivo na impressora (size remoto)")
                 time.sleep(1.5)
